@@ -1,0 +1,187 @@
+display:
+  - platform: rpi_dpi_rgb
+    id: main_display
+    color_order: RGB
+    invert_colors: True
+    update_interval: never
+    auto_clear_enabled: false # takes 2.8 seconds to clear the display
+    dimensions:
+      width: 800
+      height: 480
+    de_pin: 40
+    hsync_pin: 39
+    vsync_pin: 41
+    pclk_pin: 0
+    pclk_frequency: 12MHz
+    data_pins:
+      red:
+        - 45 #r1
+        - 48 #r2
+        - 47 #r3
+        - 21 #r4
+        - 14 #r5
+      green:
+        - 5 #g0
+        - 6 #g1
+        - 7 #g2
+        - 15 #g3
+        - 16 #g4
+        - 4 #g5
+      blue:
+        - 8 #b1
+        - 3 #b2
+        - 46 #b3
+        - 9 #b4
+        - 1 #b5
+
+touchscreen:
+  platform: gt911
+
+globals:
+  - id: random_int_var
+    type: int
+    restore_value: no
+    initial_value: "0"
+
+binary_sensor:
+  - platform: lvgl
+    widget: button
+    name: Button
+    on_press: # genrate a random number between -10 and +10 and update meter
+      then:
+        - lambda: |-
+            id(random_int_var) = (rand() % 20) - 10;
+        - lvgl.indicator.update:
+            id: power_meter_input
+            value: !lambda return id(random_int_var);
+        - lvgl.label.update:
+            id: power_kw
+            text:
+              format: "%dkW"
+              args: ["id(random_int_var)"]
+image:
+  - file: mdi:sun-wireless-outline
+    id: solar_power_icon
+    type: grayscale
+    transparency: alpha_channel
+    resize: 50x50
+
+lvgl:
+  color_depth: 16
+  bg_color: 0
+  border_width: 0
+  outline_width: 0
+  shadow_width: 0
+  text_font: unscii_16
+  align: center
+  style_definitions:
+    - id: meter_style
+      border_width: 0
+      outline_width: 0
+      align: center
+      bg_color: 0
+    - id: title_style
+      text_font: MONTSERRAT_40
+      align: center
+      text_color: 0xFFFFFF
+      bg_opa: TRANSP
+      bg_color: 0
+      radius: 4
+      pad_all: 2
+    - id: detail_style
+      text_font: MONTSERRAT_18
+      align: center
+      text_color: 0xFFFFFF
+      bg_opa: TRANSP
+      bg_color: 0
+      radius: 4
+      pad_all: 2
+  widgets:
+    - button: # Button
+        id: button
+        height: 100
+        width: 200
+        x: 20
+        y: 20
+        border_width: 0
+        outline_width: 0
+        align: TOP_LEFT
+        checkable: false
+        widgets:
+          - label:
+              align: center
+              text: "Button"
+    - obj: # Meter
+        height: 240
+        width: 240
+        bg_color: 0
+        border_width: 0
+        outline_width: 0
+        shadow_width: 0
+        pad_all: 4
+        align: TOP_MID
+        widgets:
+          - meter: # Gradient color  arc
+              height: 100%
+              width: 100%
+              border_width: 0
+              outline_width: 0
+              align: center
+              bg_color: 0
+              scales:
+                angle_range: 180
+                range_to: 10
+                range_from: -10
+                ticks:
+                  count: 0
+                indicators:
+                  - line:
+                      id: power_meter_input
+                      width: 8
+                      color: 0xFFFFFF
+                      r_mod: 12
+                      value: 50
+                  - arc:
+                      color: 0xFF3000
+                      r_mod: 10
+                      width: 20
+                      start_value: -10
+                      end_value: 0
+                  - arc:
+                      color: 0x00FF00
+                      r_mod: 10
+                      width: 20
+                      start_value: 0
+                      end_value: 10
+          - arc: # black arc to erase middle part of meter indicator line
+              height: 160
+              width: 160
+              align: center
+              arc_color: 0x000000
+              arc_width: 150
+              start_angle: 0
+              end_angle: 360
+              indicator:
+                arc_width: 150
+                arc_color: 0x000000
+          - label: # gauge lower and higher range indicators
+              styles: detail_style
+              y: 8
+              x: -99
+              text: "-10"
+          - label:
+              styles: detail_style
+              y: 8
+              x: 99
+              text: "+10"
+          - label: # value label
+              styles: title_style
+              id: power_kw
+              y: -10
+          - image:
+              src: solar_power_icon
+              id: img_solar_power
+              align: center
+              image_recolor: 0xFFFF00
+              image_recolor_opa: 100%
+              y: 50

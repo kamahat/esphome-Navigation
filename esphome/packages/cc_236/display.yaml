@@ -1,0 +1,60 @@
+
+touchscreen:
+  platform: gt911
+
+display:
+  - platform: rpi_dpi_rgb
+    id: main_display
+    color_order: RGB
+    invert_colors: True
+    update_interval: 5s
+    auto_clear_enabled: false
+    dimensions:
+      width: 800
+      height: 480
+    de_pin: 40
+    hsync_pin: 39
+    vsync_pin: 41
+    pclk_pin: 0
+    pclk_frequency: 12MHz
+    data_pins:
+      red:
+        - 45 #r1
+        - 48 #r2
+        - 47 #r3
+        - 21 #r4
+        - 14 #r5
+      green:
+        - 5 #g0
+        - 6 #g1
+        - 7 #g2
+        - 15 #g3
+        - 16 #g4
+        - 4 #g5
+      blue:
+        - 8 #b1
+        - 3 #b2
+        - 46 #b3
+        - 9 #b4
+        - 1 #b5
+    lambda: |-
+      auto red = Color(255, 0, 0);
+      auto green = Color(0, 255, 0);
+      auto blue = Color(0, 0, 255);
+      auto white = Color(255, 255, 255);
+      id(main_display).filled_circle(50, 50, 40, red);
+      id(main_display).filled_circle(100, 50, 40, green);
+      id(main_display).filled_circle(150, 50, 40, blue);
+      id(main_display).filled_circle(200, 50, 40, white);
+
+# example button
+binary_sensor:
+  - platform: touchscreen
+    name: Top Left Touch Button
+    x_min: 10
+    x_max: 240
+    y_min: 10
+    y_max: 90
+    on_press:
+      - lambda: |-
+          ESP_LOGI("btn", "Button pressed");

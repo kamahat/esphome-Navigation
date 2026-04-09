@@ -1,0 +1,127 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  packages/cc_236/gps_heading.yaml
+#  Cap GPS via UDP port 60606 — trames NMEA GPVTG/GNVTG
+#
+#  Flux : Peplink 10.104.30.254 → UDP broadcast → cc-236:60606
+#
+#  Socket ouvert dans wifi.on_connect (WiFi garanti UP, lwIP prêt).
+#  Poll non-bloquant toutes les secondes.
+#
+#  Comportement :
+#    Vitesse >= 1 km/h  → cap calculé + filtre EMA α=0.15
+#    Vitesse <  1 km/h  → cap gelé sur dernière valeur, "arret" affiché
+#    COG champ vide     → GPS non locké, cap gelé
+#    g_gps_ready        → true dès qu'un paquet VTG bien formé est reçu
+#
+#  g_heading déclaré dans imu_lvgl.yaml
+# ─────────────────────────────────────────────────────────────────────────────
+
+esphome:
+  includes:
+    - packages/cc_236/gps_udp.h
+
+  # Ouvrir le socket APRÈS connexion WiFi
+  # (on_boot priority 200 est AVANT WiFi → socket bindé sur interface inexistante)
+
+wifi:
+  on_connect:
+    then:
+      - lambda: |-
+          ESP_LOGI("gps_hdg", "WiFi connecte — ouverture socket UDP 60606");
+          gps_udp_begin(60606);
+  on_disconnect:
+    then:
+      - lambda: |-
+          // Socket fermé proprement si WiFi tombe (sera rouvert à la reconnexion)
+          if (_gps_sock >= 0) { ::close(_gps_sock); _gps_sock = -1; }
+          ESP_LOGW("gps_hdg", "WiFi deconnecte — socket UDP ferme");
+
+globals:
+  - id: g_gps_speed_kmh
+    type: float
+    restore_value: no
+    initial_value: "0.0"
+
+  - id: g_hdg_ema
+    type: float
+    restore_value: no
+    initial_value: "0.0"
+
+  - id: g_gps_ready
+    type: bool
+    restore_value: no
+    initial_value: "false"
+
+  # g_heading déclaré dans imu_lvgl.yaml
+
+sensor:
+  - platform: template
+    name: "${device_name} GPS Heading"
+    id: gps_heading_sensor
+    unit_of_measurement: "deg"
+    accuracy_decimals: 1
+    icon: mdi:compass-rose
+    state_class: measurement
+    lambda: return id(g_heading);
+    update_interval: 5s
+
+  - platform: template
+    name: "${device_name} GPS Speed"
+    id: gps_speed_sensor
+    unit_of_measurement: "km/h"
+    accuracy_decimals: 1
+    icon: mdi:speedometer
+    state_class: measurement
+    device_class: speed
+    lambda: return id(g_gps_speed_kmh);
+    update_interval: 5s
+
+interval:
+  # ── Poll UDP (1s) ─────────────────────────────────────────────────────────
+  - interval: 1s
+    then:
+      - lambda: |-
+          float heading   = id(g_heading);
+          float hdg_ema   = id(g_hdg_ema);
+          float speed_kmh = id(g_gps_speed_kmh);
+          bool  ready     = id(g_gps_ready);
+
+          gps_udp_poll(heading, hdg_ema, speed_kmh, ready,
+                       /*alpha=*/0.15f, /*min_speed=*/0.3f);  // 0.3 km/h ≈ marche à pied lente
+
+          id(g_heading)       = heading;
+          id(g_hdg_ema)       = hdg_ema;
+          id(g_gps_speed_kmh) = speed_kmh;
+          id(g_gps_ready)     = ready;
+
+  # ── Mise a jour labels Info + statut GPS 5s ─────────────────────────────
+  - interval: 5s
+    then:
+      - lvgl.label.update:
+          id: info_gps_status
+          text: !lambda |-
+            if (!id(g_gps_ready))            return std::string("attente...");
+            if (id(g_gps_speed_kmh) < 0.3f) return std::string("arret");
+            return std::string("actif");
+      - lvgl.label.update:
+          id: info_gps_heading
+          text:
+            format: "%03.1f deg"
+            args: [ "id(g_heading)" ]
+      - lvgl.label.update:
+          id: info_gps_speed
+          text:
+            format: "%.1f km/h"
+            args: [ "id(g_gps_speed_kmh)" ]
+      - lvgl.label.update:
+          id: imu_status_label
+          text: !lambda |-
+            static char buf[48];
+            if (!id(g_gps_ready))
+              snprintf(buf, sizeof(buf), "GPS: attente");
+            else if (id(g_gps_speed_kmh) < 0.3f)
+              snprintf(buf, sizeof(buf), "GPS: arret  %03.0f deg", id(g_heading));
+            else
+              snprintf(buf, sizeof(buf), "GPS: %.0f km/h  %03.0f deg",
+                       id(g_gps_speed_kmh), id(g_heading));
+            return buf;
