@@ -1,0 +1,76 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  cc-236.yaml  —  Elecrow 5" ESP32-S3 Display
+#  https://www.elecrow.com/wiki/esp32-display-502727-intelligent-touch-screen
+#  https://devices.esphome.io/devices/elecrow-5inch-esp32-display/
+# ─────────────────────────────────────────────────────────────────────────────
+
+substitutions:
+  device_name: "cc-236"
+  friendly_name: "CC Ecran"
+  device_description: "Inclinometre IMU + Ecran LVGL pour Camping-Car"
+  device_area: "Camping-Car"
+  version: "3.3"
+  board:
+    flash_size: 4MB
+    variant: esp32s3
+  net:
+    octet1: "236"
+    IP1: 10.104.30.${net.octet1}
+    IP2: 192.168.80.${net.octet1}
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+  min_version: "2026.3.1"
+  platformio_options:
+    board_build.esp-idf.memory_type: qio_opi
+    board_build.flash_mode: dio
+
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: ${board.variant}
+  flash_size: ${board.flash_size}
+  framework:
+    type: esp-idf
+    sdkconfig_options:
+      CONFIG_ESP32S3_DEFAULT_CPU_FREQ_240: y
+      CONFIG_ESP32S3_DATA_CACHE_64KB: y
+      CONFIG_SPIRAM_FETCH_INSTRUCTIONS: y
+      CONFIG_SPIRAM_RODATA: y
+
+packages:
+  wifi:        !include packages/cc_236/wifi.yaml
+  device_base: !include common/base.yaml
+  display:     !include packages/cc_236/imu_lvgl.yaml    # display HW + BMI160 + LVGL UI
+  fonts:       !include packages/cc_236/font_b612.yaml # police B612 LVGL
+  gps:         !include packages/cc_236/gps_heading.yaml # cap GPS depuis Peplink via HA
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+logger:
+  level: DEBUG
+  baud_rate: 115200
+
+# ── Rétroéclairage ────────────────────────────────────────────────────────────
+output:
+  - platform: ledc
+    pin: 2
+    frequency: 1220
+    id: gpio_backlight_pwm
+
+light:
+  - platform: monochromatic
+    output: gpio_backlight_pwm
+    name: Display Backlight
+    id: back_light
+    restore_mode: ALWAYS_ON
+
+# ── I2C — BMI160 (SDA=GPIO19, SCL=GPIO20) ────────────────────────────────────
+i2c:
+  id: i2c_bus_a
+  sda: GPIO19
+  scl: GPIO20
+  scan: false          # désactiver en prod (coût au boot)
+  frequency: 400kHz
