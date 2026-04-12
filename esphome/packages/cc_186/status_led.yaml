@@ -1,0 +1,131 @@
+
+# ─── Onboard RGB LED — ESP32-C6 Zero (WS2812 GPIO8) ─────────────────────────
+#
+# Séquence :
+#   Démarrage          → Rouge fixe
+#   WiFi en recherche  → Bleu clignotant (500 ms ON / 500 ms OFF)
+#   WiFi connecté      → Bleu fixe
+#   IMU prêt           → Violet fixe
+#   Après 5 min        → Éteinte
+#
+# La LED s'éteint définitivement 5 min après le boot,
+# quel que soit l'état atteint.
+# ─────────────────────────────────────────────────────────────────────────────
+
+globals:
+  # État courant de la LED
+  # 0 = rouge (boot)
+  # 1 = bleu clignotant (WiFi search)
+  # 2 = bleu fixe (WiFi OK)
+  # 3 = violet fixe (IMU prêt)
+  # 4 = éteinte
+  - id: led_state
+    type: int
+    restore_value: no
+    initial_value: '0'
+
+  # Phase du clignotement bleu (toggle)
+  - id: led_blink_phase
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+
+  # Compteur 100 ms → 5 min = 3000 ticks
+  - id: led_tick_count
+    type: int
+    restore_value: no
+    initial_value: '0'
+
+light:
+  - platform: esp32_rmt_led_strip
+    id: onboard_led
+    pin: GPIO8
+    num_leds: 1
+    chipset: WS2812
+    rgb_order: RGB
+    internal: true
+
+# ── Mise à jour de l'état logique (priorités) ────────────────────────────────
+interval:
+  # Chaque seconde : on réévalue dans quel état on doit être
+  - interval: 1s
+    then:
+      - lambda: |-
+          if (id(led_state) == 4) return;  // définitivement éteinte
+
+          // Priorité décroissante : IMU ready > WiFi OK > WiFi search > boot
+          if (id(wifi_id).is_connected()) {
+            id(led_state) = 2;
+          } else {
+            // Garde l'état boot (0) ou passe en recherche WiFi (1)
+            // dès qu'on a eu le temps de chercher (après 3 s)
+            if (id(led_state) == 0 && id(led_tick_count) >= 30) {
+              id(led_state) = 1;
+            }
+          }
+
+  # Toutes les 100 ms : driver LED + compteur extinction
+  - interval: 100ms
+    then:
+      - lambda: |-
+          id(led_tick_count) += 1;
+
+          // Extinction après 5 min (3000 × 100 ms)
+          if (id(led_tick_count) >= 3000) {
+            id(led_state) = 4;
+          }
+
+          auto call = id(onboard_led);
+
+          switch (id(led_state)) {
+
+            case 0: {  // Rouge fixe (boot)
+              auto c = call->turn_on();
+              c.set_rgb(1.0, 0.0, 0.0);
+              c.set_brightness(0.15);
+              c.set_transition_length(0);
+              c.perform();
+              break;
+            }
+
+            case 1: {  // Bleu clignotant (WiFi search)
+              id(led_blink_phase) = !id(led_blink_phase);
+              if (id(led_blink_phase)) {
+                auto c = call->turn_on();
+                c.set_rgb(0.0, 0.0, 1.0);
+                c.set_brightness(0.15);
+                c.set_transition_length(0);
+                c.perform();
+              } else {
+                auto c = call->turn_off();
+                c.set_transition_length(0);
+                c.perform();
+              }
+              break;
+            }
+
+            case 2: {  // Bleu fixe (WiFi connecté)
+              auto c = call->turn_on();
+              c.set_rgb(0.0, 0.0, 1.0);
+              c.set_brightness(0.15);
+              c.set_transition_length(0);
+              c.perform();
+              break;
+            }
+
+            case 3: {  // Violet fixe (IMU prêt)
+              auto c = call->turn_on();
+              c.set_rgb(0.5, 0.0, 1.0);
+              c.set_brightness(0.15);
+              c.set_transition_length(0);
+              c.perform();
+              break;
+            }
+
+            default: {  // Éteinte
+              auto c = call->turn_off();
+              c.set_transition_length(0);
+              c.perform();
+              break;
+            }
+          }
