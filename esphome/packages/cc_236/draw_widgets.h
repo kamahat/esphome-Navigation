@@ -277,14 +277,17 @@ static const int32_t CLM_H    = 130;
 static const float   CLM_CX   = 180.0f;
 static const float   CLM_R    = 480.0f;
 static const float   CLM_TY   = 75.0f;
-static const float   CLM_CCY  = CLM_TY - CLM_R;   // = -405
+static const float   CLM_CCY  = CLM_TY - CLM_R;
 static const float   CLM_TW   = 12.0f;
 static const float   CLM_BALL_R = 9.0f;
 static const float   CLM_MAX_SANG = 20.0f;
+static const int32_t CLM_ANG_L = (int32_t)(90 - CLM_MAX_SANG);
+static const int32_t CLM_ANG_R = (int32_t)(90 + CLM_MAX_SANG);
+static const int32_t CLM_BUF_SZ = CLM_W * CLM_H;  // pixels 16bpp
 
-// Angles LVGL du tube (centre = 90°=bas de l'arc = haut du canvas côté bille)
-static const int32_t CLM_ANG_L = (int32_t)(90 - CLM_MAX_SANG);  // 70
-static const int32_t CLM_ANG_R = (int32_t)(90 + CLM_MAX_SANG);  // 110
+// Buffers de fond alloués en PSRAM (attribut IRAM_ATTR non nécessaire ici)
+static uint16_t* clm_bg_roll  = nullptr;
+static uint16_t* clm_bg_pitch = nullptr;
 
 static void _clm_pos(float ang, float max_ang, float& bx, float& by) {
     float sang = (ang / max_ang) * CLM_MAX_SANG;
@@ -293,8 +296,8 @@ static void _clm_pos(float ang, float max_ang, float& bx, float& by) {
     by = CLM_CCY + CLM_R * sinf(rad);
 }
 
-// ── 2a. Fond statique — appel unique au boot ──────────────────────────────────
-static void clinometer_draw_bg(lv_obj_t* canvas, float max_angle) {
+// ── Fond statique (lent, une fois au boot) ────────────────────────────────────
+static void clinometer_draw_bg(lv_obj_t* canvas, float max_angle, uint16_t** bg_buf_ptr) {
     if (!canvas) return;
 
     const float z6  = CLM_MAX_SANG * (6.0f  / max_angle);
@@ -304,134 +307,154 @@ static void clinometer_draw_bg(lv_obj_t* canvas, float max_angle) {
     const int32_t R_i   = (int32_t)CLM_R;
     const int32_t TW_i  = (int32_t)CLM_TW;
 
-    // 1. Fond sombre
     lv_canvas_fill_bg(canvas, C(0x08090E), LV_OPA_COVER);
 
-    // 2. Halos LED semi-transparents
-    _carc(canvas, CCX_i, CCY_i, R_i,
-          (int32_t)(90-z6), (int32_t)(90+z6),   C(0x22C55E), TW_i*2+18, (lv_opa_t)28);
-    _carc(canvas, CCX_i, CCY_i, R_i,
-          (int32_t)(90-z10),(int32_t)(90-z6),   C(0xF59E0B), TW_i*2+14, (lv_opa_t)22);
-    _carc(canvas, CCX_i, CCY_i, R_i,
-          (int32_t)(90+z6), (int32_t)(90+z10),  C(0xF59E0B), TW_i*2+14, (lv_opa_t)22);
-    _carc(canvas, CCX_i, CCY_i, R_i,
-          CLM_ANG_L, (int32_t)(90-z10),          C(0xEF4444), TW_i*2+10, (lv_opa_t)18);
-    _carc(canvas, CCX_i, CCY_i, R_i,
-          (int32_t)(90+z10), CLM_ANG_R,          C(0xEF4444), TW_i*2+10, (lv_opa_t)18);
+    // Halos LED
+    _carc(canvas,CCX_i,CCY_i,R_i,(int32_t)(90-z6),(int32_t)(90+z6),C(0x22C55E),TW_i*2+18,(lv_opa_t)28);
+    _carc(canvas,CCX_i,CCY_i,R_i,(int32_t)(90-z10),(int32_t)(90-z6),C(0xF59E0B),TW_i*2+14,(lv_opa_t)22);
+    _carc(canvas,CCX_i,CCY_i,R_i,(int32_t)(90+z6),(int32_t)(90+z10),C(0xF59E0B),TW_i*2+14,(lv_opa_t)22);
+    _carc(canvas,CCX_i,CCY_i,R_i,CLM_ANG_L,(int32_t)(90-z10),C(0xEF4444),TW_i*2+10,(lv_opa_t)18);
+    _carc(canvas,CCX_i,CCY_i,R_i,(int32_t)(90+z10),CLM_ANG_R,C(0xEF4444),TW_i*2+10,(lv_opa_t)18);
 
-    // 3. Remplissage tube par scanlines horizontales
+    // Remplissage tube par scanlines
     {
-        lv_draw_line_dsc_t ld;
-        lv_draw_line_dsc_init(&ld);
-        ld.width = 1; ld.opa = LV_OPA_COVER;
-
-        for (int yi = 0; yi < CLM_H; yi++) {
-            float y = (float)yi;
-            float dy_cc = y - CLM_CCY;                        // > 0 car CCY<0
-            float dx2_out = CLM_R*CLM_R + CLM_TW*(CLM_TW+2.0f*CLM_R) - dy_cc*dy_cc;
-            float dx2_in  = CLM_R*CLM_R - CLM_TW*(CLM_TW+2.0f*CLM_R) - dy_cc*dy_cc;
-            // Formule exacte: inner=(R-TW)²-dy²  outer=(R+TW)²-dy²
-            float dyo2 = (CLM_R+CLM_TW)*(CLM_R+CLM_TW) - dy_cc*dy_cc;
-            float dyi2 = (CLM_R-CLM_TW)*(CLM_R-CLM_TW) - dy_cc*dy_cc;
-            if (dyo2 <= 0.0f) continue;
-            float dxo = sqrtf(dyo2);
-            float dxi = (dyi2 > 0.0f) ? sqrtf(dyi2) : 0.0f;
-
-            // Deux segments : gauche [CX-dxo .. CX-dxi] et droite [CX+dxi .. CX+dxo]
-            float segs[2][2] = {{CLM_CX-dxo, CLM_CX-dxi},{CLM_CX+dxi, CLM_CX+dxo}};
-
-            for (int side = 0; side < 2; side++) {
-                int32_t x0s = std::max((int32_t)0, (int32_t)floorf(segs[side][0]));
-                int32_t x1s = std::min((int32_t)(CLM_W-1), (int32_t)ceilf(segs[side][1]));
-                if (x0s >= x1s) continue;
-                int seg_x0 = x0s;
-                lv_color_t seg_col = C(0x000000);
-                bool first = true;
-                for (int xi = x0s; xi <= x1s; xi++) {
-                    float dxh = (float)xi - CLM_CX;
-                    float tilt = atan2f(dxh, dy_cc) * 180.0f / M_PIf
-                                 / CLM_MAX_SANG * max_angle;
-                    float at = fabsf(tilt);
-                    lv_color_t col = (at<=6.0f)?C(0x22C55E):(at<=10.0f)?C(0xF59E0B):C(0xBF3030);
-                    if (first){ seg_col=col; seg_x0=xi; first=false; }
-                    else if (col.full != seg_col.full || xi==x1s){
-                        int xe=(col.full!=seg_col.full)?xi-1:xi;
-                        ld.color=seg_col;
-                        lv_point_t pts[2]={{(lv_coord_t)seg_x0,(lv_coord_t)yi},
-                                           {(lv_coord_t)xe,    (lv_coord_t)yi}};
+        lv_draw_line_dsc_t ld; lv_draw_line_dsc_init(&ld);
+        ld.width=1; ld.opa=LV_OPA_COVER;
+        for(int32_t yi=0;yi<CLM_H;yi++){
+            float y=(float)yi, dy_cc=y-CLM_CCY;
+            float dyo2=(CLM_R+CLM_TW)*(CLM_R+CLM_TW)-dy_cc*dy_cc;
+            float dyi2=(CLM_R-CLM_TW)*(CLM_R-CLM_TW)-dy_cc*dy_cc;
+            if(dyo2<=0.0f) continue;
+            float dxo=sqrtf(dyo2), dxi=(dyi2>0.0f)?sqrtf(dyi2):0.0f;
+            float segs[2][2]={{CLM_CX-dxo,CLM_CX-dxi},{CLM_CX+dxi,CLM_CX+dxo}};
+            for(int side=0;side<2;side++){
+                int32_t x0s=std::max((int32_t)0,(int32_t)floorf(segs[side][0]));
+                int32_t x1s=std::min((int32_t)(CLM_W-1),(int32_t)ceilf(segs[side][1]));
+                if(x0s>=x1s) continue;
+                int32_t sx0=x0s; lv_color_t sc=C(0); bool first=true;
+                for(int32_t xi=x0s;xi<=x1s;xi++){
+                    float dxh=(float)xi-CLM_CX;
+                    float t=atan2f(dxh,dy_cc)*180.0f/M_PIf/CLM_MAX_SANG*max_angle;
+                    float at=fabsf(t);
+                    lv_color_t col=(at<=6.0f)?C(0x22C55E):(at<=10.0f)?C(0xF59E0B):C(0xBF3030);
+                    if(first){sc=col;sx0=xi;first=false;}
+                    else if(col.full!=sc.full||xi==x1s){
+                        int32_t xe=(col.full!=sc.full)?xi-1:xi;
+                        ld.color=sc;
+                        lv_point_t pts[2]={{(lv_coord_t)sx0,(lv_coord_t)yi},{(lv_coord_t)xe,(lv_coord_t)yi}};
                         lv_canvas_draw_line(canvas,pts,2,&ld);
-                        seg_col=col; seg_x0=xi;
+                        sc=col; sx0=xi;
                     }
                 }
-                if(!first && seg_x0<=x1s){
-                    ld.color=seg_col;
-                    lv_point_t pts[2]={{(lv_coord_t)seg_x0,(lv_coord_t)yi},
-                                       {(lv_coord_t)x1s,   (lv_coord_t)yi}};
-                    lv_canvas_draw_line(canvas,pts,2,&ld);
-                }
+                if(!first&&sx0<=x1s){ld.color=sc;lv_point_t pts[2]={{(lv_coord_t)sx0,(lv_coord_t)yi},{(lv_coord_t)x1s,(lv_coord_t)yi}};lv_canvas_draw_line(canvas,pts,2,&ld);}
             }
         }
     }
 
-    // 4. Parois
-    _carc(canvas, CCX_i, CCY_i, R_i+(int32_t)CLM_TW, CLM_ANG_L, CLM_ANG_R, C(0x4A5568), 2);
-    _carc(canvas, CCX_i, CCY_i, R_i-(int32_t)CLM_TW, CLM_ANG_L, CLM_ANG_R, C(0x4A5568), 2);
+    // Parois
+    _carc(canvas,CCX_i,CCY_i,R_i+(int32_t)CLM_TW,CLM_ANG_L,CLM_ANG_R,C(0x4A5568),2);
+    _carc(canvas,CCX_i,CCY_i,R_i-(int32_t)CLM_TW,CLM_ANG_L,CLM_ANG_R,C(0x4A5568),2);
 
-    // 5. Ticks + labels
-    const lv_font_t* fnt = lv_font_default();
-    const float grads[] = {0.0f, 6.0f, 10.0f, max_angle};
-    const int   n_grads = (max_angle > 10.5f) ? 4 : 3;
-    auto draw_tick = [&](float pa) {
-        float sang = (pa/max_angle)*CLM_MAX_SANG;
-        float rad  = (90.0f+sang)*M_PIf/180.0f;
-        float ca=cosf(rad), si=sinf(rad);
+    // Ticks + labels
+    const lv_font_t* fnt=lv_font_default();
+    const float grads[]={0.0f,6.0f,10.0f,max_angle};
+    const int n_grads=(max_angle>10.5f)?4:3;
+    auto dtick=[&](float pa){
+        float sang=(pa/max_angle)*CLM_MAX_SANG;
+        float rad=(90.0f+sang)*M_PIf/180.0f;
+        float ca=cosf(rad),si=sinf(rad);
         float ox=CLM_CX+(CLM_R-CLM_TW)*ca, oy=CLM_CCY+(CLM_R-CLM_TW)*si;
-        float nx=-ca, ny=-si;
-        float tlen=(pa==0.0f)?14.0f:(pa==max_angle)?10.0f:8.0f;
+        float nx=-ca,ny=-si,tl=(pa==0.0f)?14.0f:(pa==max_angle)?10.0f:8.0f;
         lv_color_t tc=(pa==0.0f)?C(0xFFFFFF):(pa==max_angle)?C(0xEF4444):C(0x94A3B8);
-        _cline(canvas,ox,oy,ox+nx*tlen,oy+ny*tlen,tc,(pa==0.0f||pa==max_angle)?2:1);
+        _cline(canvas,ox,oy,ox+nx*tl,oy+ny*tl,tc,(pa==0.0f||pa==max_angle)?2:1);
         if(pa==10.0f||pa==max_angle){
-            char buf[6]; snprintf(buf,sizeof(buf),"%.0f",pa);
-            float lx=ox+nx*(tlen+3)-5, ly=oy+ny*(tlen+3)-7;
+            char buf[6];snprintf(buf,sizeof(buf),"%.0f",pa);
+            float lx=ox+nx*(tl+3)-5,ly=oy+ny*(tl+3)-7;
             if(lx>2&&lx<CLM_W-18&&ly>0&&ly<CLM_H-6)
                 _ctext(canvas,(int32_t)lx,(int32_t)ly,buf,fnt,C(0x64748B));
         }
     };
-    for(int i=0;i<n_grads;i++){ draw_tick(grads[i]); if(grads[i]!=0.0f)draw_tick(-grads[i]); }
+    for(int i=0;i<n_grads;i++){dtick(grads[i]);if(grads[i]!=0.0f)dtick(-grads[i]);}
 
-    // 6. Hairline centre
+    // Hairline centre
     {float r0=90.0f*M_PIf/180.0f;
      _cline(canvas,CLM_CX+(CLM_R-CLM_TW)*cosf(r0),CLM_CCY+(CLM_R-CLM_TW)*sinf(r0),
                    CLM_CX+(CLM_R+CLM_TW)*cosf(r0),CLM_CCY+(CLM_R+CLM_TW)*sinf(r0),
                    C(0xFFFFFF),1,(lv_opa_t)LV_OPA_60);}
+
+    // ── Sauvegarder le fond dans le buffer PSRAM ──────────────────────────────
+    if(bg_buf_ptr){
+        if(!*bg_buf_ptr){
+            // Allouer en PSRAM (heap externe)
+            *bg_buf_ptr = (uint16_t*)heap_caps_malloc(
+                CLM_BUF_SZ * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
+        }
+        if(*bg_buf_ptr){
+            lv_img_dsc_t* img = (lv_img_dsc_t*)lv_canvas_get_img(canvas);
+            if(img && img->data)
+                memcpy(*bg_buf_ptr, img->data, CLM_BUF_SZ * sizeof(uint16_t));
+        }
+    }
 }
 
-// ── 2b. Bille dynamique — appelé toutes les 80ms ─────────────────────────────
-// prev_bx/prev_by : position précédente (initialisée à -999).
-// La fonction efface l'ancienne bille en repeignant le fond local,
-// puis dessine la nouvelle bille.
-// ── Redessine fond + bille en un seul appel ──────────────────────────────────
-// Appelé à chaque frame (80ms). Le fond statique (~8ms sur ESP32-S3) +
-// la bille (~1ms) donnent ~9ms total, compatible avec update_interval: never.
-static void clinometer_draw(lv_obj_t* canvas, float angle, float max_angle) {
-    if (!canvas) return;
-    // 1. Fond statique (zones couleur, parois, ticks)
-    clinometer_draw_bg(canvas, max_angle);
-    // 2. Bille (par-dessus le fond fraîchement dessiné)
+// ── Mise à jour bille seule — ~0.3ms ─────────────────────────────────────────
+static void clinometer_draw_ball(lv_obj_t* canvas, const uint16_t* bg_buf,
+                                  float angle, float max_angle,
+                                  float& prev_bx, float& prev_by) {
+    if(!canvas || !bg_buf) return;
+
     float ang = std::max(-max_angle, std::min(max_angle, angle));
-    float bx, by;
+    float bx,by;
     _clm_pos(ang, max_angle, bx, by);
     int32_t bxi=(int32_t)roundf(bx), byi=(int32_t)roundf(by);
+
+    // Restaurer la zone de l'ancienne bille depuis le buffer de fond
+    lv_img_dsc_t* img = (lv_img_dsc_t*)lv_canvas_get_img(canvas);
+    if(img && img->data){
+        uint16_t* dst = (uint16_t*)img->data;
+        auto restore_patch = [&](int32_t px, int32_t py){
+            int32_t br = (int32_t)(CLM_BALL_R + 4);
+            int32_t x0=std::max((int32_t)0,px-br), y0=std::max((int32_t)0,py-br);
+            int32_t x1=std::min((int32_t)(CLM_W-1),px+br), y1=std::min((int32_t)(CLM_H-1),py+br);
+            for(int32_t iy=y0;iy<=y1;iy++)
+                memcpy(&dst[iy*CLM_W+x0], &bg_buf[iy*CLM_W+x0], (x1-x0+1)*sizeof(uint16_t));
+        };
+        // Effacer ancienne bille
+        if(prev_bx > -900.0f)
+            restore_patch((int32_t)roundf(prev_bx), (int32_t)roundf(prev_by));
+        // Effacer nouvelle zone aussi (évite artefacts si mouvement rapide)
+        restore_patch(bxi, byi);
+    }
+
+    prev_bx = bx; prev_by = by;
+
+    // Dessiner nouvelle bille
     lv_color_t ball_col;
-    float aa = fabsf(ang);
-    if     (aa<=6.0f)  ball_col=C(0xF8FAFC);
+    float aa=fabsf(ang);
+    if(aa<=6.0f) ball_col=C(0xF8FAFC);
     else if(aa<=10.0f) ball_col=C(0xFEF3C7);
-    else               ball_col=C(0xFEE2E2);
-    _ccirc(canvas, bxi,   byi,   (int32_t)(CLM_BALL_R+3), C(0x000000)); // ombre
-    _ccirc(canvas, bxi,   byi,   (int32_t)CLM_BALL_R,      ball_col);
-    _ccirc(canvas, bxi-3, byi-3, 3,                         C(0xFFFFFF)); // reflet
-    // Invalider l'intégralité du canvas (fond redessiné entièrement)
-    lv_obj_invalidate(canvas);
+    else ball_col=C(0xFEE2E2);
+    _ccirc(canvas,bxi,byi,(int32_t)(CLM_BALL_R+3),C(0x000000));
+    _ccirc(canvas,bxi,byi,(int32_t)CLM_BALL_R,ball_col);
+    _ccirc(canvas,bxi-3,byi-3,3,C(0xFFFFFF));
+
+    // Invalider uniquement la zone de la bille
+    int32_t br2=(int32_t)(CLM_BALL_R+5);
+    lv_area_t area={
+        (lv_coord_t)std::max((int32_t)0,bxi-br2),
+        (lv_coord_t)std::max((int32_t)0,byi-br2),
+        (lv_coord_t)std::min((int32_t)(CLM_W-1),bxi+br2),
+        (lv_coord_t)std::min((int32_t)(CLM_H-1),byi+br2)
+    };
+    lv_obj_invalidate_area(canvas, &area);
 }
+
+// ── Wrapper boot ──────────────────────────────────────────────────────────────
+static void clinometer_draw(lv_obj_t* canvas, float angle, float max_angle) {
+    clinometer_draw_bg(canvas, max_angle, nullptr);
+    float px=-999.0f, py=-999.0f;
+    clinometer_draw_ball(canvas, nullptr, angle, max_angle, px, py);
+}
+
 
 #undef C

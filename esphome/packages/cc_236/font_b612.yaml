@@ -28,7 +28,7 @@ font:
     id: b612_24
     size: 24
     bpp: 4
-    glyphs: " !#%&()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]_abcdefghijklmnopqrstuvwxyz{|}"
+    glyphs: " !#%&()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]_abcdefghijklmnopqrstuvwxyz{|}°"
 
   - file: fonts/B612-Regular.ttf
     id: b612_32
