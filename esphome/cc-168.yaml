@@ -1,0 +1,113 @@
+substitutions:
+  device_name: ${name}-${net.octet1}
+  friendly_name: ${name}-${net.octet1}
+  device_area: "Camping-Car"
+
+  version: "3.0"
+  name: cc
+  device_description: "TPMS(ra6070 TPMSII) pour Camping-Car"
+
+  board:
+    flash_size: 4MB
+    variant: esp32c6
+  net:
+    octet1: "168"
+    IP1: 10.104.30.168
+    IP2: 192.168.80.168
+
+  # MACs TPMS — à renseigner avec tes adresses réelles Format: XX:XX:XX:XX:XX:XX
+  tpms_mac:
+    front_left: !secret tpms_mac_FL
+    front_right: !secret tpms_mac_FR
+    rear_right: !secret tpms_mac_RR
+    rear_left: !secret tpms_mac RL
+  tpms_udp_dest: "192.168.80.236"   # broadcast sous-réseau (ou IP fixe cc-236)
+  tpms_udp_port: "60607"
+
+# ── ESP32-C6 Zero ─────────────────────────────────────────────────────────────
+esp32:
+  board: esp32-c6-devkitm-1
+  variant: ${board.variant}
+  flash_size: ${board.flash_size}
+  framework:
+    type: esp-idf
+    version: recommended
+    sdkconfig_options:
+      CONFIG_ESPTOOLPY_FLASHSIZE_4MB: "y"
+      # PSRAM OPI/OctalSPI
+      CONFIG_SPIRAM: "y"
+      CONFIG_SPIRAM_MODE_OCT: "y"
+      CONFIG_SPIRAM_SPEED_80M: "y"
+      CONFIG_SPIRAM_FETCH_INSTRUCTIONS: "y"
+      CONFIG_SPIRAM_RODATA: "y"
+      # BLE sur PSRAM → libère RAM interne
+      CONFIG_BT_ALLOCATION_FROM_SPIRAM_FIRST: "y"
+      CONFIG_BT_BLE_DYNAMIC_ENV_MEMORY: "y"
+  cpu_frequency: 80MHz
+
+# ── ESPHome ───────────────────────────────────────────────────────────────────
+esphome:
+  name: ${device_name}
+  area: ${device_area}
+  comment: ${device_description}
+  min_version: 2025.11.0
+  includes:
+    - packages/cc_168/tpms_helpers.h
+    - packages/cc_168/tpms_udp_sender.h 
+
+# ── Packages ──────────────────────────────────────────────────────────────────
+packages:
+  wifi:            !include packages/cc_168/wifi.yaml
+  device_base:     !include common/base.yaml
+  network_service: !include common/network-service.yaml
+  status_led:      !include packages/cc_168/status_led.yaml
+  tpms:            !include packages/cc_168/tpms.yaml
+
+# ── Logger ────────────────────────────────────────────────────────────────────
+logger:
+  level: INFO
+  baud_rate: 115200
+  logs:
+    component: ERROR
+    light: ERROR                 # LED onboard → silencieux en DEBUG
+    esp32_rmt_led_strip: ERROR   # driver WS2812 RMT → silencieux en DEBUG
+
+# ── I2C ───────────────────────────────────────────────────────────────────────
+i2c:
+  id: i2c_bus_a
+  sda: GPIO0    # bleu
+  scl: GPIO1    # vert
+  scan: false
+  frequency: 400kHz
+
+# ── Temps ─────────────────────────────────────────────────────────────────────
+# homeassistant_time est défini dans common/base.yaml → ne pas redéclarer ici
+# Si base.yaml ne le contient pas, décommenter ci-dessous :
+# time:
+#   - platform: homeassistant
+#     id: homeassistant_time
+#     timezone: CET-1CEST,M3.5.0,M10.5.0/3
+#     update_interval: 15min
+interval:
+  - interval: 10s
+    then:
+      - lambda: |-
+          float fl_p = id(tpms_fl_pressure).has_state()
+                       ? id(tpms_fl_pressure).state : -1.0f;
+          float fl_t = id(tpms_fl_temperature).has_state()
+                       ? id(tpms_fl_temperature).state : -99.0f;
+          float fr_p = id(tpms_fr_pressure).has_state()
+                       ? id(tpms_fr_pressure).state : -1.0f;
+          float fr_t = id(tpms_fr_temperature).has_state()
+                       ? id(tpms_fr_temperature).state : -99.0f;
+          float rl_p = id(tpms_rl_pressure).has_state()
+                       ? id(tpms_rl_pressure).state : -1.0f;
+          float rl_t = id(tpms_rl_temperature).has_state()
+                       ? id(tpms_rl_temperature).state : -99.0f;
+          float rr_p = id(tpms_rr_pressure).has_state()
+                       ? id(tpms_rr_pressure).state : -1.0f;
+          float rr_t = id(tpms_rr_temperature).has_state()
+                       ? id(tpms_rr_temperature).state : -99.0f;
+          tpms_udp_send("${tpms_udp_dest}", ${tpms_udp_port},
+                        fl_p, fl_t, fr_p, fr_t,
+                        rl_p, rl_t, rr_p, rr_t);
