@@ -5,9 +5,11 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 substitutions:
+  tpms_udp_port: "60607"     # TPMS depuis cc-168
+  batt_udp_port: "60608"     # Batterie SOC depuis cc-167
   device_name: "cc-236"
   friendly_name: "CC Ecran"
-  device_description: "Inclinometre IMU + TPMS + Ecran LVGL pour Camping-Car"
+  device_description: "Inclinometre IMU + Ecran LVGL pour Camping-Car"
   device_area: "Camping-Car"
   version: "3.3"
   board:
@@ -17,7 +19,7 @@ substitutions:
     octet1: "236"
     IP1: 10.104.30.${net.octet1}
     IP2: 192.168.80.${net.octet1}
-  tpms_udp_port: "60607"     # port UDP réception TPMS depuis cc-168
+
 esphome:
   name: ${device_name}
   friendly_name: ${friendly_name}
