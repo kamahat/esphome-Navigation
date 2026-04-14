@@ -9,8 +9,8 @@ In the tpms.yaml there is 2 lines which are used to show MAC addresse of TPMS in
     #     - lambda: tpms_dump_raw(x);
 
 
-![image](./docs/20260409_213007.jpg)
+![image](./docs/inclinometre.jpg)
 
-![Video](./docs/20260407_172428.mp4)
+![Video](./docs/TPMS.jpg)
 
 ![CrowPanem](./docs/esp32_hmi_display_5inch.webp)
