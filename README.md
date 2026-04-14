@@ -14,3 +14,6 @@ In the tpms.yaml there is 2 lines which are used to show MAC addresse of TPMS in
 ![Video](./docs/TPMS.jpg)
 
 ![CrowPanem](./docs/esp32_hmi_display_5inch.webp)
+
+
+I've used the basic version, but i suggest using the Advanced with ESP32-C6 : https://www.elecrow.com/crowpanel-advance-5-0-hmi-esp32-ai-display-800x480-ips-artificial-intelligent-touch-screen.html
