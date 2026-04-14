@@ -1,0 +1,2102 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  packages/cc_236/imu_lvgl.yaml  —  LVGL 8.4.0
+#  Elecrow 5" 800x480  •  BMI160 IMU  •  3 onglets
+#
+#  Onglet Attitude   : clinometres roulis/tangage + compas nautique
+#  Onglet Info       : valeurs brutes, statut IMU
+#  Onglet Parametres : calibration + inversion axes
+#
+#  C++ : packages/cc_236/draw_widgets.h  (clinometre + compas)
+# ─────────────────────────────────────────────────────────────────────────────
+
+esphome:
+  includes:
+    - packages/cc_236/draw_widgets.h
+    - packages/cc_236/tpms_udp.h
+    - packages/cc_236/batt_udp.h
+  on_boot:
+    priority: -200    # apres init LVGL et widgets
+    then:
+      - lambda: |-
+          // Ouvrir les sockets UDP (persistants, non-bloquants)
+          tpms_udp_begin(${tpms_udp_port});
+          batt_udp_begin(${batt_udp_port});
+          lv_obj_t* rc = id(roll_canvas);
+          lv_obj_t* pc = id(pitch_canvas);
+          if (rc && lv_obj_is_valid(rc)) clinometer_draw_bg(rc, id(g_max_roll), &clm_bg_roll);
+          if (pc && lv_obj_is_valid(pc)) clinometer_draw_bg(pc, id(g_max_pitch), &clm_bg_pitch);
+          float px1=-999.0f, py1=-999.0f, px2=-999.0f, py2=-999.0f;
+          if (rc && clm_bg_roll)  clinometer_draw_ball(rc, clm_bg_roll,  0.0f, id(g_max_roll), px1, py1);
+          if (pc && clm_bg_pitch) clinometer_draw_ball(pc, clm_bg_pitch, 0.0f, id(g_max_pitch), px2, py2);
+          id(g_roll_ball_x)  = px1; id(g_roll_ball_y)  = py1;
+          id(g_pitch_ball_x) = px2; id(g_pitch_ball_y) = py2;
+          lv_obj_invalidate(lv_scr_act());
+
+image:
+  - file: images/delfin-c621.png
+    id: img_delfin
+    type: RGB565
+
+display:
+  - platform: rpi_dpi_rgb
+    id: main_display
+    color_order: RGB
+    invert_colors: true
+    update_interval: never    # LVGL gère son propre flush — ne pas bloquer la boucle
+    auto_clear_enabled: false
+    dimensions:
+      width: 800
+      height: 480
+    de_pin:    40
+    hsync_pin: 39
+    vsync_pin: 41
+    pclk_pin:  0
+    pclk_frequency: 12MHz
+    data_pins:
+      red:   [45, 48, 47, 21, 14]
+      green: [5,  6,  7,  15, 16, 4]
+      blue:  [8,  3,  46,  9,  1]
+
+touchscreen:
+  platform: gt911
+  on_touch:
+    then:
+      - lambda: |-
+          id(g_last_activity_ms) = millis();
+          if (id(g_screen_sleeping)) {
+            id(g_screen_sleeping) = false;
+            // Rallumer le rétroéclairage
+            auto call = id(back_light).turn_on();
+            call.set_brightness(1.0f);
+            call.perform();
+            ESP_LOGI("sleep", "Ecran reveille par toucher");
+          }
+
+globals:
+  - id: g_roll
+    type: float
+    restore_value: no
+    initial_value: "0.0"
+  - id: g_pitch
+    type: float
+    restore_value: no
+    initial_value: "0.0"
+  - id: g_roll_raw
+    type: float
+    restore_value: no
+    initial_value: "0.0"
+  - id: g_pitch_raw
+    type: float
+    restore_value: no
+    initial_value: "0.0"
+  - id: g_roll_offset
+    type: float
+    restore_value: yes
+    initial_value: "0.0"
+  - id: g_pitch_offset
+    type: float
+    restore_value: yes
+    initial_value: "0.0"
+  - id: g_sign_roll
+    type: int
+    restore_value: yes
+    initial_value: "1"
+  - id: g_sign_pitch
+    type: int
+    restore_value: yes
+    initial_value: "1"
+  - id: g_swap_rp
+    type: int
+    restore_value: yes
+    initial_value: "0"
+  - id: g_heading
+    type: float
+    restore_value: no
+    initial_value: "0.0"
+  - id: g_imu_last_ms
+    type: uint32_t
+    restore_value: no
+    initial_value: "0"
+  - id: g_imu_ready
+    type: bool
+    restore_value: no
+    initial_value: "false"
+
+  # Positions bille clinometre (pour restauration partielle)
+  - id: g_roll_ball_x
+    type: float
+    restore_value: no
+    initial_value: "-999.0"
+  - id: g_roll_ball_y
+    type: float
+    restore_value: no
+    initial_value: "-999.0"
+  - id: g_pitch_ball_x
+    type: float
+    restore_value: no
+    initial_value: "-999.0"
+  - id: g_pitch_ball_y
+    type: float
+    restore_value: no
+    initial_value: "-999.0"
+
+  # Limites maximales — stockées en flash, modifiables depuis l'onglet Parametres
+  - id: g_max_roll
+    type: float
+    restore_value: yes
+    initial_value: "15.0"
+  - id: g_max_pitch
+    type: float
+    restore_value: yes
+    initial_value: "15.0"
+
+  # Pressions + températures TPMS (reçues via UDP depuis cc-168)
+  - id: g_tpms_fl_p
+    type: float
+    restore_value: yes
+    initial_value: "-1.0"
+  - id: g_tpms_fl_t
+    type: float
+    restore_value: no
+    initial_value: "-99.0"
+  - id: g_tpms_fr_p
+    type: float
+    restore_value: yes
+    initial_value: "-1.0"
+  - id: g_tpms_fr_t
+    type: float
+    restore_value: no
+    initial_value: "-99.0"
+  - id: g_tpms_rl_p
+    type: float
+    restore_value: yes
+    initial_value: "-1.0"
+  - id: g_tpms_rl_t
+    type: float
+    restore_value: no
+    initial_value: "-99.0"
+  - id: g_tpms_rr_p
+    type: float
+    restore_value: yes
+    initial_value: "-1.0"
+  - id: g_tpms_rr_t
+    type: float
+    restore_value: no
+    initial_value: "-99.0"
+  - id: g_tpms_ready
+    type: bool
+    restore_value: no
+    initial_value: "false"
+
+  # Batterie (SOC + puissance charge depuis cc-167)
+  - id: g_batt_soc
+    type: float
+    restore_value: yes
+    initial_value: "-1.0"
+  - id: g_batt_chg
+    type: float
+    restore_value: no
+    initial_value: "0.0"
+  - id: g_batt_ready
+    type: bool
+    restore_value: no
+    initial_value: "false"
+
+  # Pressions de référence à 20°C (configurables dans Paramètres)
+  - id: g_tpms_ref_front
+    type: float
+    restore_value: yes
+    initial_value: "4.0"
+  - id: g_tpms_ref_rear
+    type: float
+    restore_value: yes
+    initial_value: "4.8"
+  - id: g_tpms_abs_limit
+    type: float
+    restore_value: yes
+    initial_value: "5.5"
+
+  # Ecran de veille
+  - id: g_sleep_enabled
+    type: bool
+    restore_value: yes
+    initial_value: "true"    # actif par defaut
+
+  - id: g_last_activity_ms
+    type: uint32_t
+    restore_value: no
+    initial_value: "0"
+
+  - id: g_screen_sleeping
+    type: bool
+    restore_value: no
+    initial_value: "false"
+
+
+binary_sensor:
+
+  - platform: lvgl
+    widget: btn_calibrate
+    name: "Calibration IMU"
+    internal: true
+    on_press:
+      then:
+        - lambda: |-
+            id(g_roll_offset)  = id(g_roll);
+            id(g_pitch_offset) = id(g_pitch);
+        - lvgl.label.update:
+            id: imu_status_label
+            text: "IMU: calibration enregistree"
+        - lambda: |-
+            lv_obj_invalidate(lv_scr_act());
+
+  - platform: lvgl
+    widget: btn_reset
+    name: "Reset Calibration IMU"
+    internal: true
+    on_press:
+      then:
+        - lambda: |-
+            id(g_roll_offset)  = 0.0f;
+            id(g_pitch_offset) = 0.0f;
+        - lvgl.label.update:
+            id: imu_status_label
+            text: "IMU: calibration remise a zero"
+
+  - platform: lvgl
+    widget: btn_calibrate_p
+    name: "Calibration IMU (param)"
+    internal: true
+    on_press:
+      then:
+        - lambda: |-
+            id(g_roll_offset)  = id(g_roll);
+            id(g_pitch_offset) = id(g_pitch);
+        - lvgl.label.update:
+            id: lbl_calib_status
+            text: !lambda |-
+              static char buf[40];
+              snprintf(buf, sizeof(buf), "Ref: R%+.1f  P%+.1f",
+                       id(g_roll_offset), id(g_pitch_offset));
+              return buf;
+
+  - platform: lvgl
+    widget: btn_reset_p
+    name: "Reset Calibration IMU (param)"
+    internal: true
+    on_press:
+      then:
+        - lambda: |-
+            id(g_roll_offset)  = 0.0f;
+            id(g_pitch_offset) = 0.0f;
+        - lvgl.label.update:
+            id: lbl_calib_status
+            text: "Ref: R+0.0  P+0.0"
+
+  - platform: lvgl
+    widget: btn_inv_roll
+    name: "Inverser Roulis"
+    internal: true
+    on_press:
+      then:
+        - lambda: |-
+            id(g_sign_roll) = -id(g_sign_roll);
+            id(g_imu_last_ms) = 0;
+        - lvgl.label.update:
+            id: lbl_inv_roll
+            text: !lambda |-
+              return std::string(id(g_sign_roll) < 0 ? "INVERSE" : "normal");
+
+  - platform: lvgl
+    widget: btn_inv_pitch
+    name: "Inverser Tangage"
+    internal: true
+    on_press:
+      then:
+        - lambda: |-
+            id(g_sign_pitch) = -id(g_sign_pitch);
+            id(g_imu_last_ms) = 0;
+        - lvgl.label.update:
+            id: lbl_inv_pitch
+            text: !lambda |-
+              return std::string(id(g_sign_pitch) < 0 ? "INVERSE" : "normal");
+
+  - platform: lvgl
+    widget: btn_swap_rp
+    name: "Swap Roll-Pitch"
+    internal: true
+    on_press:
+      then:
+        - lambda: |-
+            id(g_swap_rp) = 1 - id(g_swap_rp);
+            id(g_imu_last_ms) = 0;
+        - lvgl.label.update:
+            id: lbl_swap_rp
+            text: !lambda |-
+              return std::string(id(g_swap_rp) ? "SWAPE" : "normal");
+
+  # ── Boutons limites roulis / tangage ────────────────────────────────────────
+  - platform: lvgl
+    widget: btn_sleep_toggle
+    name: "Veille ecran toggle"
+    internal: true
+    on_press:
+      then:
+        - lambda: |-
+            id(g_sleep_enabled) = !id(g_sleep_enabled);
+            id(g_last_activity_ms) = millis();
+            // Si on desactive la veille et l'ecran dort, le reveiller
+            if (!id(g_sleep_enabled) && id(g_screen_sleeping)) {
+              id(g_screen_sleeping) = false;
+              auto call = id(back_light).turn_on();
+              call.set_brightness(1.0f);
+              call.perform();
+            }
+        - lvgl.label.update:
+            id: lbl_sleep_status
+            text: !lambda |-
+              return std::string(id(g_sleep_enabled) ? "active (10 min)" : "desactivee");
+        - lvgl.widget.update:
+            id: btn_sleep_toggle
+            bg_color: !lambda |-
+              return id(g_sleep_enabled) ? lv_color_hex(0x1E3A5F) : lv_color_hex(0x431407);
+
+  # ── Boutons référence TPMS ─────────────────────────────────────────────────
+  - platform: lvgl
+    widget: btn_ref_front_minus
+    name: "TPMS ref avant moins"
+    internal: true
+    on_press:
+      then:
+        - lambda: |-
+            float v = id(g_tpms_ref_front) - 0.1f;
+            if (v < 1.0f) v = 1.0f;
+            id(g_tpms_ref_front) = roundf(v * 10.0f) / 10.0f;
+        - lvgl.label.update:
+            id: lbl_tpms_ref_front
+            text:
+              format: "%.1f bar"
+              args: [ "id(g_tpms_ref_front)" ]
+
+  - platform: lvgl
+    widget: btn_ref_front_plus
+    name: "TPMS ref avant plus"
+    internal: true
+    on_press:
+      then:
+        - lambda: |-
+            float v = id(g_tpms_ref_front) + 0.1f;
+            if (v > 6.0f) v = 6.0f;
+            id(g_tpms_ref_front) = roundf(v * 10.0f) / 10.0f;
+        - lvgl.label.update:
+            id: lbl_tpms_ref_front
+            text:
+              format: "%.1f bar"
+              args: [ "id(g_tpms_ref_front)" ]
+
+  - platform: lvgl
+    widget: btn_ref_rear_minus
+    name: "TPMS ref arriere moins"
+    internal: true
+    on_press:
+      then:
+        - lambda: |-
+            float v = id(g_tpms_ref_rear) - 0.1f;
+            if (v < 1.0f) v = 1.0f;
+            id(g_tpms_ref_rear) = roundf(v * 10.0f) / 10.0f;
+        - lvgl.label.update:
+            id: lbl_tpms_ref_rear
+            text:
+              format: "%.1f bar"
+              args: [ "id(g_tpms_ref_rear)" ]
+
+  - platform: lvgl
+    widget: btn_ref_rear_plus
+    name: "TPMS ref arriere plus"
+    internal: true
+    on_press:
+      then:
+        - lambda: |-
+            float v = id(g_tpms_ref_rear) + 0.1f;
+            if (v > 6.0f) v = 6.0f;
+            id(g_tpms_ref_rear) = roundf(v * 10.0f) / 10.0f;
+        - lvgl.label.update:
+            id: lbl_tpms_ref_rear
+            text:
+              format: "%.1f bar"
+              args: [ "id(g_tpms_ref_rear)" ]
+
+  - platform: lvgl
+    widget: btn_roll_minus
+    name: "Roulis max moins"
+    internal: true
+    on_press:
+      then:
+        - lambda: |-
+            float v = id(g_max_roll) - 1.0f;
+            if (v < 5.0f) v = 5.0f;
+            id(g_max_roll) = v;
+        - lvgl.label.update:
+            id: lbl_max_roll_val
+            text:
+              format: "%.0f deg"
+              args: [ "id(g_max_roll)" ]
+
+  - platform: lvgl
+    widget: btn_roll_plus
+    name: "Roulis max plus"
+    internal: true
+    on_press:
+      then:
+        - lambda: |-
+            float v = id(g_max_roll) + 1.0f;
+            if (v > 30.0f) v = 30.0f;
+            id(g_max_roll) = v;
+        - lvgl.label.update:
+            id: lbl_max_roll_val
+            text:
+              format: "%.0f deg"
+              args: [ "id(g_max_roll)" ]
+
+  - platform: lvgl
+    widget: btn_pitch_minus
+    name: "Tangage max moins"
+    internal: true
+    on_press:
+      then:
+        - lambda: |-
+            float v = id(g_max_pitch) - 1.0f;
+            if (v < 5.0f) v = 5.0f;
+            id(g_max_pitch) = v;
+        - lvgl.label.update:
+            id: lbl_max_pitch_val
+            text:
+              format: "%.0f deg"
+              args: [ "id(g_max_pitch)" ]
+
+  - platform: lvgl
+    widget: btn_pitch_plus
+    name: "Tangage max plus"
+    internal: true
+    on_press:
+      then:
+        - lambda: |-
+            float v = id(g_max_pitch) + 1.0f;
+            if (v > 30.0f) v = 30.0f;
+            id(g_max_pitch) = v;
+        - lvgl.label.update:
+            id: lbl_max_pitch_val
+            text:
+              format: "%.0f deg"
+              args: [ "id(g_max_pitch)" ]
+
+sensor:
+  - platform: bmi160
+    address: 0x68
+    i2c_id: i2c_bus_a
+    update_interval: 50ms
+    acceleration_x:
+      id: bmi_ax
+      internal: true
+    acceleration_y:
+      id: bmi_ay
+      internal: true
+    acceleration_z:
+      id: bmi_az
+      internal: true
+    gyroscope_x:
+      id: bmi_gx
+      internal: true
+    gyroscope_y:
+      id: bmi_gy
+      internal: true
+    gyroscope_z:
+      id: bmi_gz
+      internal: true
+    temperature:
+      name: "IMU Temperature"
+      id: bmi_temp
+      unit_of_measurement: "C"
+      accuracy_decimals: 1
+      entity_category: diagnostic
+      icon: mdi:thermometer
+      filters:
+        - throttle: 30s
+
+  - platform: template
+    name: "Roll"
+    id: imu_roll
+    unit_of_measurement: "deg"
+    accuracy_decimals: 1
+    state_class: measurement
+    icon: mdi:axis-x-rotate-clockwise
+    lambda: return id(g_roll) - id(g_roll_offset);
+    update_interval: 200ms
+    filters:
+      - clamp:
+          min_value: -15.0
+          max_value: 15.0
+
+  - platform: template
+    name: "Pitch"
+    id: imu_pitch
+    unit_of_measurement: "deg"
+    accuracy_decimals: 1
+    state_class: measurement
+    icon: mdi:axis-y-rotate-clockwise
+    lambda: return id(g_pitch) - id(g_pitch_offset);
+    update_interval: 200ms
+    filters:
+      - clamp:
+          min_value: -15.0
+          max_value: 15.0
+
+interval:
+
+  # ── Filtre complementaire 50ms ────────────────────────────────────────────
+  - interval: 50ms
+    then:
+      - lambda: |-
+          if (!id(bmi_ax).has_state() || !id(bmi_ay).has_state() ||
+              !id(bmi_az).has_state()) return;
+
+          float ax = id(bmi_ax).state;
+          float ay = id(bmi_ay).state;
+          float az = id(bmi_az).state;
+          float gx = id(bmi_gx).state;
+          float gy = id(bmi_gy).state;
+
+          float norm = sqrtf(ax*ax + ay*ay + az*az);
+          if (!std::isfinite(norm) || norm < 1.0f || norm > 25.0f) return;
+          if (!std::isfinite(gx) || !std::isfinite(gy)) return;
+
+          uint32_t now_ms = millis();
+          if (id(g_imu_last_ms) == 0) {
+            float ra0 = atan2f(ay, az) * 180.0f / M_PI;
+            float pa0 = atan2f(-ax, sqrtf(ay*ay + az*az)) * 180.0f / M_PI;
+            if (id(g_swap_rp)) { float t=ra0; ra0=pa0; pa0=t; }
+            id(g_roll)      = (float)id(g_sign_roll)  * ra0;
+            id(g_pitch)     = (float)id(g_sign_pitch) * pa0;
+            id(g_imu_last_ms) = now_ms;
+            id(g_imu_ready) = true;
+            return;
+          }
+          float dt = (now_ms - id(g_imu_last_ms)) / 1000.0f;
+          id(g_imu_last_ms) = now_ms;
+          if (dt <= 0.0f || dt > 0.5f) return;
+
+          float roll_a  = atan2f(ay, az) * 180.0f / M_PI;
+          float pitch_a = atan2f(-ax, sqrtf(ay*ay + az*az)) * 180.0f / M_PI;
+          if (id(g_swap_rp)) { float t=roll_a; roll_a=pitch_a; pitch_a=t; }
+          roll_a  *= (float)id(g_sign_roll);
+          pitch_a *= (float)id(g_sign_pitch);
+          float grx = (float)id(g_sign_roll)  * (id(g_swap_rp) ? gy : gx);
+          float gry = (float)id(g_sign_pitch) * (id(g_swap_rp) ? gx : gy);
+
+          id(g_roll_raw)  = roll_a;
+          id(g_pitch_raw) = pitch_a;
+
+          const float CF = 0.98f;
+          id(g_roll)  = CF * (id(g_roll)  + grx*dt) + (1.0f-CF) * roll_a;
+          id(g_pitch) = CF * (id(g_pitch) + gry*dt) + (1.0f-CF) * pitch_a;
+
+  # ── Mise a jour LVGL 80ms ─────────────────────────────────────────────────
+  - interval: 80ms
+    then:
+      - if:
+          condition:
+            lambda: return id(g_imu_ready) && !id(g_screen_sleeping);
+          then:
+            # Init timer activite au premier cycle
+            - lambda: |-
+                if (id(g_last_activity_ms) == 0) id(g_last_activity_ms) = millis();
+            # Bille seule (~0.3ms) + compas (~20ms) — pas de redraw fond
+            - lambda: |-
+                float roll_c  = id(g_roll)  - id(g_roll_offset);
+                float pitch_c = id(g_pitch) - id(g_pitch_offset);
+                lv_obj_t* rc = id(roll_canvas);
+                lv_obj_t* pc = id(pitch_canvas);
+                lv_obj_t* cc = id(compass_canvas);
+                float rbx=id(g_roll_ball_x),  rby=id(g_roll_ball_y);
+                float pbx=id(g_pitch_ball_x), pby=id(g_pitch_ball_y);
+                if (rc && lv_obj_is_valid(rc) && clm_bg_roll)
+                    clinometer_draw_ball(rc, clm_bg_roll,  roll_c,  id(g_max_roll), rbx, rby);
+                if (pc && lv_obj_is_valid(pc) && clm_bg_pitch)
+                    clinometer_draw_ball(pc, clm_bg_pitch, pitch_c, id(g_max_pitch), pbx, pby);
+                id(g_roll_ball_x)=rbx; id(g_roll_ball_y)=rby;
+                id(g_pitch_ball_x)=pbx; id(g_pitch_ball_y)=pby;
+                if (cc && lv_obj_is_valid(cc))
+                    compass_draw_frame(cc, roll_c, pitch_c, id(g_heading));
+                // lv_timer_handler uniquement quand l'ecran est actif —
+                // evite que le polling GT911 interne genere des faux touchs
+                // qui reveillent l'ecran en veille
+                lv_timer_handler();
+            # Labels valeurs (onglet Attitude)
+            - lvgl.label.update:
+                id: roll_value_label
+                text:
+                  format: "%+.1f"
+                  args: [ "id(g_roll) - id(g_roll_offset)" ]
+            - lvgl.label.update:
+                id: pitch_value_label
+                text:
+                  format: "%+.1f"
+                  args: [ "id(g_pitch) - id(g_pitch_offset)" ]
+            # Dots couleur
+            - lvgl.widget.update:
+                id: roll_dot
+                bg_color: !lambda |-
+                  float v = std::abs(id(g_roll) - id(g_roll_offset));
+                  if (v >= 10.0f) return lv_color_hex(0xEF4444);
+                  if (v >=  6.0f) return lv_color_hex(0xF59E0B);
+                  return lv_color_hex(0x22C55E);
+            - lvgl.widget.update:
+                id: pitch_dot
+                bg_color: !lambda |-
+                  float v = std::abs(id(g_pitch) - id(g_pitch_offset));
+                  if (v >= 10.0f) return lv_color_hex(0xEF4444);
+                  if (v >=  6.0f) return lv_color_hex(0xF59E0B);
+                  return lv_color_hex(0x22C55E);
+          else:
+            - lvgl.label.update:
+                id: imu_status_label
+                text: "IMU: initialisation..."
+
+  # ── Réception TPMS UDP 2s (non-bloquant) ────────────────────────────────────
+  - interval: 2s
+    then:
+      - lambda: |-
+          tpms_udp_recv(&id(g_tpms_fl_p), &id(g_tpms_fl_t),
+                        &id(g_tpms_fr_p), &id(g_tpms_fr_t),
+                        &id(g_tpms_rl_p), &id(g_tpms_rl_t),
+                        &id(g_tpms_rr_p), &id(g_tpms_rr_t),
+                        &id(g_tpms_ready));
+
+  # ── Réception batterie UDP 5s ───────────────────────────────────────────────
+  - interval: 5s
+    then:
+      - lambda: |-
+          batt_udp_recv(&id(g_batt_soc), &id(g_batt_chg), &id(g_batt_ready));
+
+  # ── Mise à jour affichage batterie 5s ────────────────────────────────────────
+  - interval: 5s
+    then:
+      - lambda: |-
+          float soc = id(g_batt_soc);
+          float chg = id(g_batt_chg);
+          bool ready = id(g_batt_ready);
+
+          // Couleur icône batterie
+          lv_color_t icon_col;
+          if (!ready || soc < 0) {
+              icon_col = lv_color_hex(0x334155);  // gris: pas de signal
+          } else if (chg > 1.0f) {
+              icon_col = lv_color_hex(0x3B82F6);  // bleu: en charge
+          } else if (soc > 80.0f) {
+              icon_col = lv_color_hex(0x00FF7F);  // vert neon
+          } else if (soc > 20.0f) {
+              icon_col = lv_color_hex(0x22C55E);  // vert
+          } else if (soc > 10.0f) {
+              icon_col = lv_color_hex(0xFACC15);  // jaune
+          } else if (soc > 6.0f) {
+              icon_col = lv_color_hex(0xF59E0B);  // orange
+          } else {
+              icon_col = lv_color_hex(0xEF4444);  // rouge
+          }
+
+          // Canvas icône batterie
+          lv_obj_t* bcanvas = id(batt_canvas);
+          if (bcanvas && lv_obj_is_valid(bcanvas))
+              battery_draw(bcanvas, soc, chg > 1.0f);
+
+          // Label valeur SOC
+          lv_obj_t* soc_lbl = id(lbl_batt_soc);
+          if (soc_lbl && lv_obj_is_valid(soc_lbl)) {
+              lv_obj_set_style_text_color(soc_lbl, icon_col, 0);
+              static char buf[12];
+              if (!ready || soc < 0) strncpy(buf, "--", sizeof(buf));
+              else snprintf(buf, sizeof(buf), "%.0f%%", soc);
+              lv_label_set_text(soc_lbl, buf);
+          }
+
+  # ── Mise à jour badges TPMS 5s ───────────────────────────────────────────────
+  - interval: 5s
+    then:
+      - lambda: |-
+          // Données brutes
+          float fl_p=id(g_tpms_fl_p), fl_t=id(g_tpms_fl_t);
+          float fr_p=id(g_tpms_fr_p), fr_t=id(g_tpms_fr_t);
+          float rl_p=id(g_tpms_rl_p), rl_t=id(g_tpms_rl_t);
+          float rr_p=id(g_tpms_rr_p), rr_t=id(g_tpms_rr_t);
+          float ref_f = id(g_tpms_ref_front);
+          float ref_r = id(g_tpms_ref_rear);
+          float abs_lim = id(g_tpms_abs_limit);
+
+          // Pression corrigée à 20°C (Gay-Lussac)
+          auto corrected = [](float p, float t) -> float {
+              return tpms_correct_pressure(p, t);
+          };
+
+          // Couleurs selon écart à la référence (pression corrigée)
+          // Vert: |écart| < 0.1  Orange: < 0.3  Rouge: >= 0.3 ou >= limite absolue
+          auto get_colors = [&](float p, float t, float ref,
+                               lv_color_t& bg, lv_color_t& bd, lv_color_t& tx) {
+              float pc = corrected(p, t);
+              if (p < 0.0f || pc < 0.0f) {
+                  // Pas de signal
+                  bg=lv_color_hex(0x111827);
+                  bd=lv_color_hex(0x1E293B);
+                  tx=lv_color_hex(0x334155);
+                  return;
+              }
+              if (p >= abs_lim) {
+                  // Limite absolue dépassée → rouge vif
+                  bg=lv_color_hex(0x450A0A);
+                  bd=lv_color_hex(0xEF4444);
+                  tx=lv_color_hex(0xEF4444);
+                  return;
+              }
+              float ecart = fabsf(pc - ref);
+              if (ecart < 0.1f) {
+                  bg=lv_color_hex(0x052E16);
+                  bd=lv_color_hex(0x22C55E);
+                  tx=lv_color_hex(0x22C55E);
+              } else if (ecart < 0.3f) {
+                  bg=lv_color_hex(0x431407);
+                  bd=lv_color_hex(0xF59E0B);
+                  tx=lv_color_hex(0xF59E0B);
+              } else {
+                  bg=lv_color_hex(0x450A0A);
+                  bd=lv_color_hex(0xEF4444);
+                  tx=lv_color_hex(0xEF4444);
+              }
+          };
+
+          struct TireData { lv_obj_t* badge; lv_obj_t* lbl;
+                            float p; float t; float ref; };
+          TireData tires[] = {
+              {id(badge_fl), id(lbl_fl_pres), fl_p, fl_t, ref_f},
+              {id(badge_fr), id(lbl_fr_pres), fr_p, fr_t, ref_f},
+              {id(badge_rl), id(lbl_rl_pres), rl_p, rl_t, ref_r},
+              {id(badge_rr), id(lbl_rr_pres), rr_p, rr_t, ref_r},
+          };
+          for (auto& tire : tires) {
+              lv_color_t bg, bd, tx;
+              get_colors(tire.p, tire.t, tire.ref, bg, bd, tx);
+              if (tire.badge && lv_obj_is_valid(tire.badge)) {
+                  // fond transparent — seulement la bordure change de couleur
+                  lv_obj_set_style_border_color(tire.badge, bd, 0);
+              }
+              if (tire.lbl && lv_obj_is_valid(tire.lbl)) {
+                  lv_obj_set_style_text_color(tire.lbl, tx, 0);
+                  static char buf[12];
+                  if (tire.p < 0.0f)
+                      strncpy(buf, "--", sizeof(buf));
+                  else {
+                      float pc = corrected(tire.p, tire.t);
+                      snprintf(buf, sizeof(buf), "%.2f", tire.p);
+                      (void)pc;  // pc utilisé pour couleur
+                  }
+                  lv_label_set_text(tire.lbl, buf);
+              }
+          }
+
+  # ── Vérification veille 30s ─────────────────────────────────────────────────
+  - interval: 30s
+    then:
+      - lambda: |-
+          if (!id(g_sleep_enabled) || id(g_screen_sleeping)) return;
+          uint32_t now = millis();
+          // Initialiser g_last_activity_ms au premier appel
+          if (id(g_last_activity_ms) == 0) {
+            id(g_last_activity_ms) = now;
+            return;
+          }
+          uint32_t elapsed = now - id(g_last_activity_ms);
+          const uint32_t TIMEOUT_MS = 10UL * 60UL * 1000UL; // 10 minutes
+          if (elapsed >= TIMEOUT_MS) {
+            id(g_screen_sleeping) = true;
+            auto call = id(back_light).turn_off();
+            call.perform();
+            ESP_LOGI("sleep", "Ecran mis en veille (%lu s sans activite)", elapsed/1000);
+          }
+
+  # ── Mise a jour onglet Info 1s ────────────────────────────────────────────
+  - interval: 1s
+    then:
+      - if:
+          condition:
+            lambda: return id(g_imu_ready);
+          then:
+            - lvgl.label.update:
+                id: imu_status_label
+                text: !lambda |-
+                  return std::string(id(g_imu_ready) ? "IMU: actif  CF alpha=0.98" : "IMU: init...");
+            - lvgl.label.update:
+                id: info_roll_corr
+                text:
+                  format: "%+.2f deg"
+                  args: [ "id(g_roll) - id(g_roll_offset)" ]
+            - lvgl.label.update:
+                id: info_roll_raw
+                text:
+                  format: "%+.2f deg"
+                  args: [ "id(g_roll_raw)" ]
+            - lvgl.label.update:
+                id: info_roll_ref
+                text:
+                  format: "%+.2f deg"
+                  args: [ "id(g_roll_offset)" ]
+            - lvgl.label.update:
+                id: info_pitch_corr
+                text:
+                  format: "%+.2f deg"
+                  args: [ "id(g_pitch) - id(g_pitch_offset)" ]
+            - lvgl.label.update:
+                id: info_pitch_raw
+                text:
+                  format: "%+.2f deg"
+                  args: [ "id(g_pitch_raw)" ]
+            - lvgl.label.update:
+                id: info_pitch_ref
+                text:
+                  format: "%+.2f deg"
+                  args: [ "id(g_pitch_offset)" ]
+            - lvgl.label.update:
+                id: info_imu_temp
+                text:
+                  format: "%.1f C"
+                  args: [ "id(bmi_temp).state" ]
+            - lvgl.label.update:
+                id: lbl_imu_temp_dolphin
+                text:
+                  format: "%.1f°C"
+                  args: [ "id(bmi_temp).state" ]
+            - lvgl.label.update:
+                id: lbl_tpms_ref_front
+                text:
+                  format: "%.1f bar"
+                  args: [ "id(g_tpms_ref_front)" ]
+            - lvgl.label.update:
+                id: lbl_tpms_ref_rear
+                text:
+                  format: "%.1f bar"
+                  args: [ "id(g_tpms_ref_rear)" ]
+            - lvgl.label.update:
+                id: lbl_max_roll_val
+                text:
+                  format: "%.0f deg"
+                  args: [ "id(g_max_roll)" ]
+            - lvgl.label.update:
+                id: lbl_max_pitch_val
+                text:
+                  format: "%.0f deg"
+                  args: [ "id(g_max_pitch)" ]
+            - lvgl.label.update:
+                id: info_axes
+                text: !lambda |-
+                  static char buf[40];
+                  const char* sr = id(g_sign_roll)  < 0 ? "invR" : "R+";
+                  const char* sp = id(g_sign_pitch) < 0 ? "invP" : "P+";
+                  const char* sw = id(g_swap_rp)    ? " swap" : "";
+                  snprintf(buf, sizeof(buf), "%s %s%s", sr, sp, sw);
+                  return buf;
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  LVGL 8.4.0 — Interface 800x480 — plein ecran (pas de footer)
+#
+#  Tabview : y=0 h=480 → tab bar 36px + contenu 444px
+#
+#  Onglet Attitude (444px) :
+#    Gauche (w=383) :
+#      Roll clinometre  y=2  h=210
+#      Boutons calib    y=215 h=26
+#      Pitch clinometre y=244 h=198
+#    Droite (w=397) :
+#      Compas canvas 320x320 + cap magnetometre
+#
+#  Onglet Info (444px) :
+#    Gauche (w=385) : IMU  (brut, ref, temp, axes)
+#    Droite : section supprimee (GPS remplace par MMC5983MA)
+#
+#  Onglet Parametres : inchange
+# ═════════════════════════════════════════════════════════════════════════════
+lvgl:
+  color_depth: 16
+  bg_color: 0x0D1117
+  border_width: 0
+  outline_width: 0
+  shadow_width: 0
+  text_font: b612_14
+
+  style_definitions:
+
+    - id: panel_s
+      bg_color: 0x111827
+      border_color: 0x1E3A5F
+      border_width: 1
+      radius: 8
+      pad_all: 6
+
+    - id: title_s
+      text_font: b612_20
+      text_color: 0x64748B
+      bg_opa: TRANSP
+      bg_color: 0
+
+    - id: val_s
+      text_font: b612_24
+      text_color: 0xF8FAFC
+      bg_opa: TRANSP
+      bg_color: 0
+
+    - id: raw_s
+      text_font: b612_14
+      text_color: 0x475569
+      bg_opa: TRANSP
+      bg_color: 0
+
+    - id: offset_s
+      text_font: b612_14
+      text_color: 0x1E3A5F
+      bg_opa: TRANSP
+      bg_color: 0
+
+    - id: hdg_s
+      text_font: b612_32
+      text_color: 0xF8FAFC
+      bg_opa: TRANSP
+      bg_color: 0
+
+    - id: info_key_s
+      text_font: b612_14
+      text_color: 0x64748B
+      bg_opa: TRANSP
+      bg_color: 0
+
+    - id: info_val_s
+      text_font: b612_14
+      text_color: 0xF8FAFC
+      bg_opa: TRANSP
+      bg_color: 0
+
+    - id: info_title_s
+      text_font: b612_20
+      text_color: 0x3B82F6
+      bg_opa: TRANSP
+      bg_color: 0
+
+    - id: status_ok_s
+      text_font: b612_14
+      text_color: 0x22C55E
+      bg_opa: TRANSP
+      bg_color: 0
+
+    - id: foot_s
+      text_font: b612_14
+      text_color: 0x334155
+      bg_opa: TRANSP
+      bg_color: 0
+
+    - id: btn_calib_s
+      bg_color: 0x1E3A5F
+      border_color: 0x3B82F6
+      border_width: 1
+      radius: 6
+      text_color: 0x93C5FD
+      text_font: b612_14
+      pad_all: 0
+
+    - id: btn_reset_s
+      bg_color: 0x1C1917
+      border_color: 0xF59E0B
+      border_width: 1
+      radius: 6
+      text_color: 0xFBBF24
+      text_font: b612_14
+      pad_all: 0
+
+    - id: btn_axis_off_s
+      bg_color: 0x111827
+      border_color: 0x334155
+      border_width: 1
+      radius: 6
+      text_color: 0x475569
+      text_font: b612_14
+      pad_all: 0
+
+    - id: btn_axis_on_s
+      bg_color: 0x431407
+      border_color: 0xEF4444
+      border_width: 1
+      radius: 6
+      text_color: 0xFCA5A5
+      text_font: b612_14
+      pad_all: 0
+
+    - id: sect_s
+      text_font: b612_20
+      text_color: 0x94A3B8
+      bg_opa: TRANSP
+      bg_color: 0
+
+  widgets:
+
+    # ── Tabview plein ecran ───────────────────────────────────────────────────
+    - tabview:
+        id: main_tabs
+        width: 800
+        height: 480
+        x: 0
+        y: 0
+        border_width: 0
+        bg_color: 0x0D1117
+        position: top
+        size: 36
+        scrollable: false
+
+        tabs:
+
+          # ══════════════════════════════════════════════════════════════════════
+          #  ONGLET 1 — DOLPHIN  (TPMS + plan véhicule)
+          # ══════════════════════════════════════════════════════════════════════
+          - name: "Dolphin"
+            bg_color: 0x0D1117
+            border_width: 0
+            scrollable: false
+            widgets:
+
+              # Image plan véhicule (760×325) ─────────────────────────────────
+              - image:
+                  src: img_delfin
+                  align: TOP_MID
+                  y: 4
+
+              # ── Température IMU au centre de l'image ───────────────────────
+              # Image : 760px centrée dans 800px → décalage x=20, centre à x=400
+              # Centre vertical image : y = 4 + 325/2 = 167
+              - obj:
+                  width: 90
+                  height: 38
+                  x: 355
+                  y: 180
+                  bg_color: 0x808080
+                  bg_opa: 90%
+                  border_width: 0
+                  radius: 6
+                  pad_all: 0
+                  widgets:
+                    - label:
+                        id: lbl_imu_temp_dolphin
+                        text_font: b612_24
+                        text_color: 0xFF5C00
+                        bg_opa: TRANSP
+                        bg_color: 0
+                        align: CENTER
+                        text: "--°C"
+
+              # ── AV-G : avant gauche — droite + haut ────────────────────────
+              - obj:
+                  id: badge_fl
+                  width: 84
+                  height: 44
+                  x: 695
+                  y: 16
+                  bg_opa: TRANSP
+                  bg_color: 0
+                  border_color: 0x22C55E
+                  border_width: 2
+                  radius: 6
+                  pad_all: 0
+                  widgets:
+                    - label:
+                        id: lbl_fl_pres
+                        text_font: b612_20
+                        text_color: 0x22C55E
+                        bg_opa: TRANSP
+                        bg_color: 0
+                        align: LEFT_MID
+                        x: 4
+                        text: "--"
+                    - label:
+                        id: lbl_fl_unit
+                        text_font: b612_14
+                        text_color: 0x475569
+                        bg_opa: TRANSP
+                        bg_color: 0
+                        align: RIGHT_MID
+                        x: -4
+                        text: "bar"
+
+              # ── AV-D : avant droit — droite + bas ──────────────────────────
+              - obj:
+                  id: badge_fr
+                  width: 84
+                  height: 44
+                  x: 695
+                  y: 300
+                  bg_opa: TRANSP
+                  bg_color: 0
+                  border_color: 0x22C55E
+                  border_width: 2
+                  radius: 6
+                  pad_all: 0
+                  widgets:
+                    - label:
+                        id: lbl_fr_pres
+                        text_font: b612_20
+                        text_color: 0x22C55E
+                        bg_opa: TRANSP
+                        bg_color: 0
+                        align: LEFT_MID
+                        x: 4
+                        text: "--"
+                    - label:
+                        id: lbl_fr_unit
+                        text_font: b612_14
+                        text_color: 0x475569
+                        bg_opa: TRANSP
+                        bg_color: 0
+                        align: RIGHT_MID
+                        x: -4
+                        text: "bar"
+
+              # ── AR-G : arrière gauche — gauche + haut ──────────────────────
+              - obj:
+                  id: badge_rl
+                  width: 84
+                  height: 44
+                  x: 2
+                  y: 16
+                  bg_opa: TRANSP
+                  bg_color: 0
+                  border_color: 0x22C55E
+                  border_width: 2
+                  radius: 6
+                  pad_all: 0
+                  widgets:
+                    - label:
+                        id: lbl_rl_pres
+                        text_font: b612_20
+                        text_color: 0x22C55E
+                        bg_opa: TRANSP
+                        bg_color: 0
+                        align: LEFT_MID
+                        x: 4
+                        text: "--"
+                    - label:
+                        id: lbl_rl_unit
+                        text_font: b612_14
+                        text_color: 0x475569
+                        bg_opa: TRANSP
+                        bg_color: 0
+                        align: RIGHT_MID
+                        x: -4
+                        text: "bar"
+
+              # ── AR-D : arrière droit — gauche + bas ────────────────────────
+              - obj:
+                  id: badge_rr
+                  width: 84
+                  height: 44
+                  x: 2
+                  y: 300
+                  bg_opa: TRANSP
+                  bg_color: 0
+                  border_color: 0x22C55E
+                  border_width: 2
+                  radius: 6
+                  pad_all: 0
+                  widgets:
+                    - label:
+                        id: lbl_rr_pres
+                        text_font: b612_20
+                        text_color: 0x22C55E
+                        bg_opa: TRANSP
+                        bg_color: 0
+                        align: LEFT_MID
+                        x: 4
+                        text: "--"
+                    - label:
+                        id: lbl_rr_unit
+                        text_font: b612_14
+                        text_color: 0x475569
+                        bg_opa: TRANSP
+                        bg_color: 0
+                        align: RIGHT_MID
+                        x: -4
+                        text: "bar"
+
+              # ── Bande batterie (bas de l'onglet Dolphin) ─────────────────────
+              - obj:
+                  width: 800
+                  height: 93
+                  align: BOTTOM_MID
+                  y: -2
+                  bg_opa: TRANSP
+                  bg_color: 0
+                  border_width: 0
+                  pad_all: 0
+                  widgets:
+                    # Canvas icône batterie 64×32
+                    - canvas:
+                        id: batt_canvas
+                        width: 64
+                        height: 32
+                        align: CENTER
+                        x: -56
+                        y: 20
+                    # Valeur SOC
+                    - label:
+                        id: lbl_batt_soc
+                        text_font: b612_32
+                        text_color: 0x334155
+                        bg_opa: TRANSP
+                        bg_color: 0
+                        align: CENTER
+                        x: 40
+                        y: 20
+                        text: "--%"
+
+          # ══════════════════════════════════════════════════════════════════════
+          #  ONGLET 1 — ATTITUDE
+          # ══════════════════════════════════════════════════════════════════════
+          - name: "Inclinometre"
+            bg_color: 0x0D1117
+            border_width: 0
+            scrollable: false
+            widgets:
+
+              # ── ROULIS (y=2 h=210) ─────────────────────────────────────────
+              - obj:
+                  styles: panel_s
+                  width: 383
+                  height: 210
+                  x: 5
+                  y: 2
+                  scrollable: false
+                  widgets:
+                    - label:
+                        styles: title_s
+                        align: TOP_MID
+                        y: 3
+                        text: "ROULIS"
+                    - obj:
+                        id: roll_dot
+                        width: 9
+                        height: 9
+                        radius: 5
+                        bg_color: 0x334155
+                        border_width: 0
+                        align: TOP_LEFT
+                        x: 6
+                        y: 8
+                    - canvas:
+                        id: roll_canvas
+                        width: 360
+                        height: 135
+                        align: TOP_MID
+                        y: 24
+                    - label:
+                        id: roll_value_label
+                        styles: val_s
+                        align: BOTTOM_MID
+                        y: -14
+                        text: "+0.0"
+
+              # ── Boutons calibration (y=215 h=26) ───────────────────────────
+              - button:
+                  id: btn_calibrate
+                  styles: btn_calib_s
+                  width: 187
+                  height: 26
+                  x: 5
+                  y: 215
+                  checkable: false
+                  widgets:
+                    - label:
+                        align: center
+                        text: "Calibrer position"
+
+              - button:
+                  id: btn_reset
+                  styles: btn_reset_s
+                  width: 190
+                  height: 26
+                  x: 198
+                  y: 215
+                  checkable: false
+                  widgets:
+                    - label:
+                        align: center
+                        text: "Reset  ref: 0"
+
+              # ── TANGAGE (y=244 h=198) ───────────────────────────────────────
+              - obj:
+                  styles: panel_s
+                  width: 383
+                  height: 198
+                  x: 5
+                  y: 244
+                  scrollable: false
+                  widgets:
+                    - label:
+                        styles: title_s
+                        align: TOP_MID
+                        y: 3
+                        text: "TANGAGE"
+                    - obj:
+                        id: pitch_dot
+                        width: 9
+                        height: 9
+                        radius: 5
+                        bg_color: 0x334155
+                        border_width: 0
+                        align: TOP_LEFT
+                        x: 6
+                        y: 8
+                    - canvas:
+                        id: pitch_canvas
+                        width: 360
+                        height: 130
+                        align: TOP_MID
+                        y: 24
+                    - label:
+                        id: pitch_value_label
+                        styles: val_s
+                        align: BOTTOM_MID
+                        y: -14
+                        text: "+0.0"
+
+              # ── Separateur vertical ────────────────────────────────────────
+              - obj:
+                  width: 2
+                  height: 440
+                  x: 393
+                  y: 1
+                  bg_color: 0x1E3A5F
+                  border_width: 0
+                  radius: 0
+
+              # ── Compas nautique (droite x=398 w=397 h=440) ─────────────────
+              - obj:
+                  styles: panel_s
+                  width: 397
+                  height: 440
+                  x: 398
+                  y: 1
+                  scrollable: false
+                  widgets:
+                    - canvas:
+                        id: compass_canvas
+                        width: 320
+                        height: 320
+                        align: TOP_MID
+                        y: 2
+                    - obj:
+                        width: 384
+                        height: 2
+                        align: TOP_MID
+                        y: 326
+                        bg_color: 0x1E3A5F
+                        border_width: 0
+                        radius: 0
+                    - obj:
+                        width: 384
+                        height: 104
+                        align: TOP_MID
+                        y: 330
+                        bg_color: 0x111827
+                        border_width: 0
+                        radius: 0
+                        widgets:
+                          - label:
+                              styles: raw_s
+                              align: TOP_MID
+                              y: 4
+                              text: "CAP MAG"
+                          - label:
+                              id: hdg_value_label
+                              styles: hdg_s
+                              align: CENTER
+                              y: -6
+                              text: "000"
+                          - label:
+                              id: imu_status_label
+                              styles: raw_s
+                              align: BOTTOM_MID
+                              y: -6
+                              text: "IMU: initialisation..."
+
+          # ══════════════════════════════════════════════════════════════════════
+          #  ONGLET 2 — INFO
+          # ══════════════════════════════════════════════════════════════════════
+          - name: "Info"
+            bg_color: 0x0D1117
+            border_width: 0
+            scrollable: false
+            widgets:
+
+              # ── Panneau IMU gauche (x=5 w=385 h=440) ──────────────────────
+              - obj:
+                  styles: panel_s
+                  width: 385
+                  height: 440
+                  x: 5
+                  y: 2
+                  scrollable: false
+                  widgets:
+                    - label:
+                        styles: info_title_s
+                        align: TOP_LEFT
+                        x: 6
+                        y: 6
+                        text: "IMU  /  BMI160"
+                    - obj:
+                        width: 373
+                        height: 1
+                        x: 0
+                        y: 30
+                        bg_color: 0x1E3A5F
+                        border_width: 0
+                        radius: 0
+
+                    # Statut
+                    - label:
+                        styles: info_key_s
+                        x: 6
+                        y: 38
+                        text: "Statut"
+                    - label:
+                        id: info_imu_status_detail
+                        styles: status_ok_s
+                        x: 160
+                        y: 38
+                        text: "actif"
+
+                    # Roulis corrige
+                    - label:
+                        styles: info_key_s
+                        x: 6
+                        y: 64
+                        text: "Roulis corrige"
+                    - label:
+                        id: info_roll_corr
+                        styles: info_val_s
+                        x: 160
+                        y: 64
+                        text: "+0.00 deg"
+
+                    # Roulis brut
+                    - label:
+                        styles: info_key_s
+                        x: 6
+                        y: 88
+                        text: "Roulis brut"
+                    - label:
+                        id: info_roll_raw
+                        styles: raw_s
+                        x: 160
+                        y: 88
+                        text: "+0.00 deg"
+
+                    # Roulis ref
+                    - label:
+                        styles: info_key_s
+                        x: 6
+                        y: 112
+                        text: "Roulis ref (cal)"
+                    - label:
+                        id: info_roll_ref
+                        styles: offset_s
+                        x: 160
+                        y: 112
+                        text: "+0.00 deg"
+
+                    - obj:
+                        width: 373
+                        height: 1
+                        x: 0
+                        y: 136
+                        bg_color: 0x1E293B
+                        border_width: 0
+                        radius: 0
+
+                    # Tangage corrige
+                    - label:
+                        styles: info_key_s
+                        x: 6
+                        y: 144
+                        text: "Tangage corrige"
+                    - label:
+                        id: info_pitch_corr
+                        styles: info_val_s
+                        x: 160
+                        y: 144
+                        text: "+0.00 deg"
+
+                    # Tangage brut
+                    - label:
+                        styles: info_key_s
+                        x: 6
+                        y: 168
+                        text: "Tangage brut"
+                    - label:
+                        id: info_pitch_raw
+                        styles: raw_s
+                        x: 160
+                        y: 168
+                        text: "+0.00 deg"
+
+                    # Tangage ref
+                    - label:
+                        styles: info_key_s
+                        x: 6
+                        y: 192
+                        text: "Tangage ref (cal)"
+                    - label:
+                        id: info_pitch_ref
+                        styles: offset_s
+                        x: 160
+                        y: 192
+                        text: "+0.00 deg"
+
+                    - obj:
+                        width: 373
+                        height: 1
+                        x: 0
+                        y: 218
+                        bg_color: 0x1E293B
+                        border_width: 0
+                        radius: 0
+
+                    # Temperature
+                    - label:
+                        styles: info_key_s
+                        x: 6
+                        y: 226
+                        text: "Temperature IMU"
+                    - label:
+                        id: info_imu_temp
+                        styles: info_val_s
+                        x: 160
+                        y: 226
+                        text: "-- C"
+
+                    # Filtre
+                    - label:
+                        styles: info_key_s
+                        x: 6
+                        y: 250
+                        text: "Filtre CF alpha"
+                    - label:
+                        styles: raw_s
+                        x: 160
+                        y: 250
+                        text: "0.98  dt=50ms"
+
+                    # Axes
+                    - label:
+                        styles: info_key_s
+                        x: 6
+                        y: 274
+                        text: "Config axes"
+                    - label:
+                        id: info_axes
+                        styles: info_val_s
+                        x: 160
+                        y: 274
+                        text: "R+  P+"
+
+                    # Limites
+                    - label:
+                        styles: info_key_s
+                        x: 6
+                        y: 298
+                        text: "Limites vehicule"
+                    - label:
+                        styles: raw_s
+                        x: 160
+                        y: 298
+                        text: "Roulis +-15  Tangage +-15"
+
+                    - obj:
+                        width: 373
+                        height: 1
+                        x: 0
+                        y: 322
+                        bg_color: 0x1E293B
+                        border_width: 0
+                        radius: 0
+
+                    # Zones alert
+                    - label:
+                        styles: info_key_s
+                        x: 6
+                        y: 330
+                        text: "Zone verte"
+                    - label:
+                        styles: status_ok_s
+                        x: 160
+                        y: 330
+                        text: "+-6 deg"
+                    - label:
+                        styles: info_key_s
+                        x: 6
+                        y: 354
+                        text: "Zone orange"
+                    - label:
+                        text_color: 0xF59E0B
+                        bg_opa: TRANSP
+                        bg_color: 0
+                        x: 160
+                        y: 354
+                        text: "+-10 deg"
+                    - label:
+                        styles: info_key_s
+                        x: 6
+                        y: 378
+                        text: "Zone rouge"
+                    - label:
+                        text_color: 0xEF4444
+                        bg_opa: TRANSP
+                        bg_color: 0
+                        x: 160
+                        y: 378
+                        text: "au-dela de 10 deg"
+
+              # ── Separateur vertical ────────────────────────────────────────
+              - obj:
+                  width: 2
+                  height: 440
+                  x: 395
+                  y: 1
+                  bg_color: 0x1E3A5F
+                  border_width: 0
+                  radius: 0
+
+
+          # ══════════════════════════════════════════════════════════════════════
+          #  ONGLET 3 — PARAMETRES
+          # ══════════════════════════════════════════════════════════════════════
+          - name: "Parametres"
+            bg_color: 0x0D1117
+            border_width: 0
+            scrollable: false
+            widgets:
+
+              # ── Section Calibration ────────────────────────────────────────
+              - obj:
+                  styles: panel_s
+                  width: 780
+                  height: 158
+                  x: 10
+                  y: 136
+                  scrollable: false
+                  widgets:
+                    - label:
+                        styles: sect_s
+                        align: TOP_LEFT
+                        x: 6
+                        y: 4
+                        text: "CALIBRATION - reference 0 sur les 2 axes"
+                    - obj:
+                        width: 760
+                        height: 1
+                        x: 0
+                        y: 24
+                        bg_color: 0x1E3A5F
+                        border_width: 0
+                        radius: 0
+                    - label:
+                        styles: raw_s
+                        x: 6
+                        y: 32
+                        text: "Garez le vehicule sur sol plat, puis appuyez sur Calibrer."
+                    - label:
+                        styles: raw_s
+                        x: 6
+                        y: 52
+                        text: "Les offsets sont memorises en flash et survivent au redemarrage."
+                    - button:
+                        id: btn_calibrate_p
+                        styles: btn_calib_s
+                        width: 280
+                        height: 44
+                        x: 6
+                        y: 78
+                        checkable: false
+                        widgets:
+                          - label:
+                              align: center
+                              text: "Calibrer position actuelle"
+                    - button:
+                        id: btn_reset_p
+                        styles: btn_reset_s
+                        width: 200
+                        height: 44
+                        x: 300
+                        y: 78
+                        checkable: false
+                        widgets:
+                          - label:
+                              align: center
+                              text: "Reset ref: 0"
+                    - label:
+                        id: lbl_calib_status
+                        styles: offset_s
+                        x: 516
+                        y: 90
+                        text: "Ref: R+0.0  P+0.0"
+
+              # ── Section Orientation capteur ────────────────────────────────
+              - obj:
+                  styles: panel_s
+                  width: 780
+                  height: 174
+                  x: 10
+                  y: 302
+                  scrollable: false
+                  widgets:
+                    - label:
+                        styles: sect_s
+                        align: TOP_LEFT
+                        x: 6
+                        y: 4
+                        text: "ORIENTATION DU CAPTEUR - montage non standard"
+                    - obj:
+                        width: 760
+                        height: 1
+                        x: 0
+                        y: 24
+                        bg_color: 0x1E3A5F
+                        border_width: 0
+                        radius: 0
+                    - label:
+                        styles: raw_s
+                        x: 6
+                        y: 32
+                        text: "Appuyez pour inverser le sens ou echanger les axes."
+                    - label:
+                        styles: raw_s
+                        x: 6
+                        y: 50
+                        text: "Bouton actif = correction active. Etat sauvegarde en flash."
+                    - button:
+                        id: btn_inv_roll
+                        styles: btn_axis_off_s
+                        width: 230
+                        height: 52
+                        x: 6
+                        y: 72
+                        checkable: true
+                        widgets:
+                          - label:
+                              align: TOP_MID
+                              y: 6
+                              text: "Inverser ROULIS"
+                          - label:
+                              id: lbl_inv_roll
+                              align: BOTTOM_MID
+                              y: -6
+                              text: "normal"
+                    - button:
+                        id: btn_inv_pitch
+                        styles: btn_axis_off_s
+                        width: 230
+                        height: 52
+                        x: 246
+                        y: 72
+                        checkable: true
+                        widgets:
+                          - label:
+                              align: TOP_MID
+                              y: 6
+                              text: "Inverser TANGAGE"
+                          - label:
+                              id: lbl_inv_pitch
+                              align: BOTTOM_MID
+                              y: -6
+                              text: "normal"
+                    - button:
+                        id: btn_swap_rp
+                        styles: btn_axis_off_s
+                        width: 280
+                        height: 52
+                        x: 486
+                        y: 72
+                        checkable: true
+                        widgets:
+                          - label:
+                              align: TOP_MID
+                              y: 6
+                              text: "Echanger Roll / Pitch"
+                          - label:
+                              id: lbl_swap_rp
+                              align: BOTTOM_MID
+                              y: -6
+                              text: "normal"
+                    - label:
+                        styles: raw_s
+                        x: 6
+                        y: 134
+                        text: "Apres changement d'axe, recalibrer pour compenser le nouvel offset."
+
+              # ── Section Pressions référence TPMS ──────────────────────────────
+              - obj:
+                  styles: panel_s
+                  width: 780
+                  height: 124
+                  x: 10
+                  y: 4
+                  scrollable: false
+                  widgets:
+                    - label:
+                        styles: sect_s
+                        align: TOP_LEFT
+                        x: 6
+                        y: 4
+                        text: "TPMS — PRESSIONS DE REFERENCE A 20°C"
+                    - obj:
+                        width: 760
+                        height: 1
+                        x: 0
+                        y: 24
+                        bg_color: 0x1E3A5F
+                        border_width: 0
+                        radius: 0
+
+                    # Référence avant
+                    - label:
+                        styles: info_key_s
+                        x: 6
+                        y: 34
+                        text: "Pneus Avant (20°C)"
+                    - label:
+                        id: lbl_tpms_ref_front
+                        styles: info_val_s
+                        x: 210
+                        y: 34
+                        text: "4.0 bar"
+                    - button:
+                        id: btn_ref_front_minus
+                        styles: btn_reset_s
+                        width: 44
+                        height: 28
+                        x: 330
+                        y: 30
+                        checkable: false
+                        widgets:
+                          - label:
+                              align: center
+                              text: "  -"
+                    - button:
+                        id: btn_ref_front_plus
+                        styles: btn_calib_s
+                        width: 44
+                        height: 28
+                        x: 382
+                        y: 30
+                        checkable: false
+                        widgets:
+                          - label:
+                              align: center
+                              text: " +"
+
+                    # Référence arrière
+                    - label:
+                        styles: info_key_s
+                        x: 6
+                        y: 72
+                        text: "Pneus Arriere (20°C)"
+                    - label:
+                        id: lbl_tpms_ref_rear
+                        styles: info_val_s
+                        x: 210
+                        y: 72
+                        text: "4.8 bar"
+                    - button:
+                        id: btn_ref_rear_minus
+                        styles: btn_reset_s
+                        width: 44
+                        height: 28
+                        x: 330
+                        y: 68
+                        checkable: false
+                        widgets:
+                          - label:
+                              align: center
+                              text: "  -"
+                    - button:
+                        id: btn_ref_rear_plus
+                        styles: btn_calib_s
+                        width: 44
+                        height: 28
+                        x: 382
+                        y: 68
+                        checkable: false
+                        widgets:
+                          - label:
+                              align: center
+                              text: " +"
+                    - label:
+                        styles: raw_s
+                        x: 450
+                        y: 46
+                        text: "Limite absolue: 5.5 bar  |  Vert: ±0.1  Orange: ±0.3  (corrigé 20°C)"
+
+              # ── Section Veille ecran ──────────────────────────────────────────
+              - obj:
+                  styles: panel_s
+                  width: 780
+                  height: 90
+                  x: 10
+                  y: 484
+                  scrollable: false
+                  widgets:
+                    - label:
+                        styles: sect_s
+                        align: TOP_LEFT
+                        x: 6
+                        y: 4
+                        text: "VEILLE ECRAN"
+                    - obj:
+                        width: 760
+                        height: 1
+                        x: 0
+                        y: 24
+                        bg_color: 0x1E3A5F
+                        border_width: 0
+                        radius: 0
+                    - button:
+                        id: btn_sleep_toggle
+                        bg_color: 0x1E3A5F
+                        border_color: 0x3B82F6
+                        border_width: 1
+                        radius: 6
+                        text_color: 0x93C5FD
+                        text_font: b612_14
+                        pad_all: 0
+                        width: 220
+                        height: 44
+                        x: 6
+                        y: 34
+                        checkable: false
+                        widgets:
+                          - label:
+                              align: center
+                              text: "Veille auto"
+                    - label:
+                        id: lbl_sleep_status
+                        styles: status_ok_s
+                        x: 240
+                        y: 50
+                        text: "active (10 min)"
+                    - label:
+                        styles: raw_s
+                        x: 500
+                        y: 50
+                        text: "Toucher = reveil"
+
+              # ── Section Limites d'angle ────────────────────────────────────
+              - obj:
+                  styles: panel_s
+                  width: 780
+                  height: 148
+                  x: 10
+                  y: 582
+                  scrollable: false
+                  widgets:
+                    - label:
+                        styles: sect_s
+                        align: TOP_LEFT
+                        x: 6
+                        y: 4
+                        text: "LIMITES D'ANGLE - vehicule"
+                    - obj:
+                        width: 760
+                        height: 1
+                        x: 0
+                        y: 24
+                        bg_color: 0x1E3A5F
+                        border_width: 0
+                        radius: 0
+                    - label:
+                        styles: raw_s
+                        x: 6
+                        y: 32
+                        text: "Apres modification, redemarrer pour recalculer le fond du clinometre."
+
+                    # Roulis
+                    - label:
+                        styles: info_key_s
+                        x: 6
+                        y: 58
+                        text: "Roulis max"
+                    - label:
+                        id: lbl_max_roll_val
+                        styles: info_val_s
+                        x: 160
+                        y: 58
+                        text: "15 deg"
+                    - button:
+                        id: btn_roll_minus
+                        styles: btn_reset_s
+                        width: 44
+                        height: 30
+                        x: 270
+                        y: 52
+                        checkable: false
+                        widgets:
+                          - label:
+                              align: center
+                              text: "  -"
+                    - button:
+                        id: btn_roll_plus
+                        styles: btn_calib_s
+                        width: 44
+                        height: 30
+                        x: 322
+                        y: 52
+                        checkable: false
+                        widgets:
+                          - label:
+                              align: center
+                              text: " +"
+
+                    # Tangage
+                    - label:
+                        styles: info_key_s
+                        x: 6
+                        y: 96
+                        text: "Tangage max"
+                    - label:
+                        id: lbl_max_pitch_val
+                        styles: info_val_s
+                        x: 160
+                        y: 96
+                        text: "15 deg"
+                    - button:
+                        id: btn_pitch_minus
+                        styles: btn_reset_s
+                        width: 44
+                        height: 30
+                        x: 270
+                        y: 90
+                        checkable: false
+                        widgets:
+                          - label:
+                              align: center
+                              text: "  -"
+                    - button:
+                        id: btn_pitch_plus
+                        styles: btn_calib_s
+                        width: 44
+                        height: 30
+                        x: 322
+                        y: 90
+                        checkable: false
+                        widgets:
+                          - label:
+                              align: center
+                              text: " +"

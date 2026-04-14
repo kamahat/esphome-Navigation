@@ -1,0 +1,127 @@
+# Enable logging
+logger:
+  level: INFO # INFO for less log, put DEBUG to view all the linky's "étiquettes" received  in the logs
+  #  baud_rate : 115200
+
+# Enable Home Assistant API
+api:
+  #password: !secret api_password
+  encryption:
+    key: !secret api_key64
+  reboot_timeout: 20min
+
+# discovery HA
+mdns:
+  disabled: false
+
+# preserve la mémoire flash
+preferences:
+  flash_write_interval: 10min
+
+sensor:
+  - platform: uptime
+    name: "Uptime Sensor"
+    id: uptime_sensor
+    type: seconds
+    entity_category: "diagnostic"
+  # This sensor is an alternative for the uptime sensor, which only sends the
+  # startup timestamp of the device ONCE! Instead of sending updates to
+  # Home Assistant constantly.
+  #
+  # This saves you tons of updates to be processed and, if recorded/stored in the
+  # Home Assistant database, many many less rows.
+  #
+  # This sensor can be triggered manually and will only update the status once!
+  #
+  # - platform: uptime
+  #   type: seconds
+  #   name: Uptime Sensor
+
+  # - platform: template
+  #   id: sensor_uptime_timestamp
+  #   name: "${friendly_name} Uptime"
+  #   device_class: "timestamp"
+  #   entity_category: "diagnostic"
+  #   accuracy_decimals: 0
+  #   update_interval: never
+  #   lambda: |-
+  #     static float timestamp = (
+  #       id(homeassistant_time).utcnow().timestamp - id(sensor_uptime).state
+  #     );
+  #     return timestamp;
+  # - platform: uptime
+  #   name: Uptime Sensor
+  #   id: uptime_seconds
+  #   internal: true
+  #   on_value:
+  #     then: 
+  #       - lambda: |-
+  #           char buffer[25];
+  #           int seconds = (id(uptime_seconds).state);
+  #           int days = seconds / (24 * 3600);
+  #           seconds = seconds % (24 * 3600);
+  #           int hours = seconds / 3600;
+  #           seconds = seconds % 3600;
+  #           int minutes = seconds /  60;
+  #           seconds = seconds % 60;
+  #           snprintf(buffer, sizeof(buffer), "%d jours %d:%d:%d", days, hours, minutes, seconds);
+  #           id(uptime_human).publish_state(to_string(buffer));
+
+text_sensor:
+  - platform: uptime
+    name: ${device_name} Uptime Human Readable
+    id: uptime_human
+    icon: mdi:clock-start
+    format:
+      separator: " "
+      days: "D"
+    internal: true
+    entity_category: "diagnostic"
+
+  - platform: version
+    id: text_sensor_version
+    name: "${friendly_name} ESPHome Version"
+    icon: mdi:cog-outline
+    # internal: true
+  
+  - platform: template
+    name: "Last Restart"
+    id: device_last_restart
+    icon: mdi:clock
+    entity_category: diagnostic
+    device_class: timestamp
+
+
+binary_sensor:
+  - platform: status
+    icon: mdi:cog-outline
+    name: "${device_name} Status"
+
+switch:
+  - platform: restart
+    icon: mdi:restart
+    name: "${device_name} Restart"
+
+time:
+  - platform: homeassistant
+    id: homeassistant_time
+    timezone: "Europe/Paris"
+      # Publish the time the device was last restarted
+    on_time_sync:
+      then:
+        # Update last restart time, but only once.
+        - if:
+            condition:
+              lambda: 'return id(device_last_restart).state == "";'
+            then:
+              - text_sensor.template.publish:
+                  id: device_last_restart
+                  state: !lambda 'return id(homeassistant_time).now().strftime("%a %d %b %Y - %I:%M:%S %p");'
+#  - platform: sntp
+#    id: sntp_time
+#    timezone: "Europe/Paris"
+
+# Enable or disable the use of IPv6 networking on the device
+network:
+  enable_ipv6: false
+

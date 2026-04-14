@@ -1,0 +1,49 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  packages/cc_236/font_b612.yaml
+#  Police B612 Regular — conçue par Airbus pour les cockpits aéronautiques
+#
+#  Prérequis :
+#    /config/esphome/fonts/B612-Regular.ttf
+#
+#  Source : https://github.com/polarsys/b612  (Open Font License)
+#
+#  IDs disponibles :
+#    b612_48  — grandes valeurs roulis / tangage
+#    b612_32  — cap GPS
+#    b612_20  — titres panneaux, sections
+#    b612_14  — valeurs brutes, footer, offsets, boutons
+#
+#  BPP 4 : anti-aliasing 16 niveaux
+#  Glyphes : ASCII imprimable 0x20-0x7E + ° (U+00B0)
+# ─────────────────────────────────────────────────────────────────────────────
+
+font:
+  - file: fonts/B612-Regular.ttf
+    id: b612_48
+    size: 48
+    bpp: 4
+    glyphs: " !#%&()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]_abcdefghijklmnopqrstuvwxyz{|}°"
+
+  - file: fonts/B612-Regular.ttf
+    id: b612_24
+    size: 24
+    bpp: 4
+    glyphs: " !#%&()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]_abcdefghijklmnopqrstuvwxyz{|}°"
+
+  - file: fonts/B612-Regular.ttf
+    id: b612_32
+    size: 32
+    bpp: 4
+    glyphs: " !#%&()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]_abcdefghijklmnopqrstuvwxyz{|}°"
+
+  - file: fonts/B612-Regular.ttf
+    id: b612_20
+    size: 20
+    bpp: 4
+    glyphs: " !#%&()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]_abcdefghijklmnopqrstuvwxyz{|}°"
+
+  - file: fonts/B612-Regular.ttf
+    id: b612_14
+    size: 14
+    bpp: 4
+    glyphs: " !#%&()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]_abcdefghijklmnopqrstuvwxyz{|}°"

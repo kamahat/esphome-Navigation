@@ -1,19 +1,51 @@
-# esphome-Navigation
-Esphome inclinometer and TPMS and based on CrowPanel 5.0"-HMI ESP32 Display 800x480 RGB TFT LCD
+# ESPHome Navigation — Bürstner Delfin C621
 
-The communication between the 2 ESP is made directly via UDP IP<=>IP and don't realy on HomeAssistant. 
+Firmware ESPHome pour le tableau de bord embarqué du camping-car **Bürstner Delfin C621**.
 
-TPMS is made via esp-c6 zero (cc_186) which can do BLE 5.0. 
-In the tpms.yaml there is 2 lines which are used to show MAC addresse of TPMS in logs. While MAC address are added to the cc-168.yaml, they can be commented.
-    # - then:
-    #     - lambda: tpms_dump_raw(x);
+> Synchronisé automatiquement depuis [`kamahat/HA_Backup`](https://github.com/kamahat/HA_Backup)
 
+---
 
-![image](./docs/inclinometre.jpg)
+## Matériel cible (`cc-236`)
 
-![Video](./docs/TPMS.jpg)
+| Composant | Référence |
+|---|---|
+| Display | Elecrow 5" ESP32-S3 800×480 |
+| IMU | BMI160 — I2C SDA=GPIO19, SCL=GPIO20 |
+| Magnétomètre | MMC5983MA *(en cours)* |
+| TPMS | cc-168 ESP32-C6 → UDP port 60607 |
+| BMS | cc-167 ESP32 → UDP port 60608 |
 
-![CrowPanem](./docs/esp32_hmi_display_5inch.webp)
+## Structure
 
+```
+cc-236.yaml                    Firmware principal (substitutions, packages)
+packages/cc_236/
+  imu_lvgl.yaml               UI LVGL 8.4 — 4 onglets
+  draw_widgets.h              Clinomètre bille + Compas nautique (C++)
+  font_b612.yaml              Police B612 (cockpit Airbus) — 4 tailles
+  tpms_udp.h                  Réception pressions TPMS depuis cc-168
+  batt_udp.h                  Réception SOC batterie depuis cc-167
+fonts/
+  B612-Regular.ttf            Police TTF
+images/
+  delfin-c621.png             Plan véhicule vue de dessus (onglet Dolphin)
+```
 
-I've used the basic version, but i suggest using the Advanced with ESP32-C6 : https://www.elecrow.com/crowpanel-advance-5-0-hmi-esp32-ai-display-800x480-ips-artificial-intelligent-touch-screen.html
+## Onglets UI
+
+| Onglet | Contenu |
+|---|---|
+| **Dolphin** | Plan véhicule + TPMS (pression corrigée 20°C) + SOC batterie |
+| **Inclinomètre** | Clinomètre bille roulis/tangage + compas nautique |
+| **Info** | Valeurs brutes IMU, calibration, zones d'alerte |
+| **Paramètres** | Références TPMS, limites angle, inversion axes, veille |
+
+## Fonctionnalités
+
+- Clinomètre "bille dans tube" roulis ±15° et tangage ±15°
+- Compas nautique avec horizon artificiel et pitch ladder
+- TPMS : correction Gay-Lussac (pression ramenée à 20°C)
+- Batterie : SOC avec icône colorée (rouge→vert neon→bleu charge)
+- Veille écran automatique 10 min (réveil par toucher)
+- Calibration offset persistante en flash
