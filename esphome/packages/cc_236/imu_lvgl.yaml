@@ -13,12 +13,14 @@ esphome:
   includes:
     - packages/cc_236/draw_widgets.h
     - packages/cc_236/tpms_udp.h
+    - packages/cc_236/batt_udp.h
   on_boot:
     priority: -200    # apres init LVGL et widgets
     then:
       - lambda: |-
-          // Ouvrir le socket UDP TPMS (persistant, non-bloquant)
+          // Ouvrir les sockets UDP (persistants, non-bloquants)
           tpms_udp_begin(${tpms_udp_port});
+          batt_udp_begin(${batt_udp_port});
           lv_obj_t* rc = id(roll_canvas);
           lv_obj_t* pc = id(pitch_canvas);
           if (rc && lv_obj_is_valid(rc)) clinometer_draw_bg(rc, id(g_max_roll), &clm_bg_roll);
@@ -182,6 +184,20 @@ globals:
     restore_value: no
     initial_value: "-99.0"
   - id: g_tpms_ready
+    type: bool
+    restore_value: no
+    initial_value: "false"
+
+  # Batterie (SOC + puissance charge depuis cc-167)
+  - id: g_batt_soc
+    type: float
+    restore_value: no
+    initial_value: "-1.0"
+  - id: g_batt_chg
+    type: float
+    restore_value: no
+    initial_value: "0.0"
+  - id: g_batt_ready
     type: bool
     restore_value: no
     initial_value: "false"
@@ -589,7 +605,7 @@ interval:
     then:
       - if:
           condition:
-            lambda: return id(g_imu_ready);
+            lambda: return id(g_imu_ready) && !id(g_screen_sleeping);
           then:
             # Init timer activite au premier cycle
             - lambda: |-
@@ -611,7 +627,9 @@ interval:
                 id(g_pitch_ball_x)=pbx; id(g_pitch_ball_y)=pby;
                 if (cc && lv_obj_is_valid(cc))
                     compass_draw_frame(cc, roll_c, pitch_c, id(g_heading));
-                // Flush dirty regions uniquement (bille + compas) — non-bloquant
+                // lv_timer_handler uniquement quand l'ecran est actif —
+                // evite que le polling GT911 interne genere des faux touchs
+                // qui reveillent l'ecran en veille
                 lv_timer_handler();
             # Labels valeurs (onglet Attitude)
             - lvgl.label.update:
@@ -659,6 +677,53 @@ interval:
                         &id(g_tpms_rl_p), &id(g_tpms_rl_t),
                         &id(g_tpms_rr_p), &id(g_tpms_rr_t),
                         &id(g_tpms_ready));
+
+  # ── Réception batterie UDP 5s ───────────────────────────────────────────────
+  - interval: 5s
+    then:
+      - lambda: |-
+          batt_udp_recv(&id(g_batt_soc), &id(g_batt_chg), &id(g_batt_ready));
+
+  # ── Mise à jour affichage batterie 5s ────────────────────────────────────────
+  - interval: 5s
+    then:
+      - lambda: |-
+          float soc = id(g_batt_soc);
+          float chg = id(g_batt_chg);
+          bool ready = id(g_batt_ready);
+
+          // Couleur icône batterie
+          lv_color_t icon_col;
+          if (!ready || soc < 0) {
+              icon_col = lv_color_hex(0x334155);  // gris: pas de signal
+          } else if (chg > 1.0f) {
+              icon_col = lv_color_hex(0x3B82F6);  // bleu: en charge
+          } else if (soc > 80.0f) {
+              icon_col = lv_color_hex(0x00FF7F);  // vert neon
+          } else if (soc > 20.0f) {
+              icon_col = lv_color_hex(0x22C55E);  // vert
+          } else if (soc > 10.0f) {
+              icon_col = lv_color_hex(0xFACC15);  // jaune
+          } else if (soc > 6.0f) {
+              icon_col = lv_color_hex(0xF59E0B);  // orange
+          } else {
+              icon_col = lv_color_hex(0xEF4444);  // rouge
+          }
+
+          // Canvas icône batterie
+          lv_obj_t* bcanvas = id(batt_canvas);
+          if (bcanvas && lv_obj_is_valid(bcanvas))
+              battery_draw(bcanvas, soc, chg > 1.0f);
+
+          // Label valeur SOC
+          lv_obj_t* soc_lbl = id(lbl_batt_soc);
+          if (soc_lbl && lv_obj_is_valid(soc_lbl)) {
+              lv_obj_set_style_text_color(soc_lbl, icon_col, 0);
+              static char buf[12];
+              if (!ready || soc < 0) strncpy(buf, "--", sizeof(buf));
+              else snprintf(buf, sizeof(buf), "%.0f%%", soc);
+              lv_label_set_text(soc_lbl, buf);
+          }
 
   # ── Mise à jour badges TPMS 5s ───────────────────────────────────────────────
   - interval: 5s
@@ -725,7 +790,7 @@ interval:
               lv_color_t bg, bd, tx;
               get_colors(tire.p, tire.t, tire.ref, bg, bd, tx);
               if (tire.badge && lv_obj_is_valid(tire.badge)) {
-                  lv_obj_set_style_bg_color(tire.badge, bg, 0);
+                  // fond transparent — seulement la bordure change de couleur
                   lv_obj_set_style_border_color(tire.badge, bd, 0);
               }
               if (tire.lbl && lv_obj_is_valid(tire.lbl)) {
@@ -1004,6 +1069,7 @@ lvgl:
           - name: "Dolphin"
             bg_color: 0x0D1117
             border_width: 0
+            scrollable: false
             widgets:
 
               # Image plan véhicule (760×325) ─────────────────────────────────
@@ -1019,9 +1085,9 @@ lvgl:
                   width: 90
                   height: 38
                   x: 355
-                  y: 148
-                  bg_opa: TRANSP
-                  bg_color: 0
+                  y: 180
+                  bg_color: 0x808080
+                  bg_opa: 90%
                   border_width: 0
                   radius: 6
                   pad_all: 0
@@ -1029,7 +1095,7 @@ lvgl:
                     - label:
                         id: lbl_imu_temp_dolphin
                         text_font: b612_24
-                        text_color: 0x94A3B8
+                        text_color: 0xFF5C00
                         bg_opa: TRANSP
                         bg_color: 0
                         align: CENTER
@@ -1040,9 +1106,10 @@ lvgl:
                   id: badge_fl
                   width: 84
                   height: 44
-                  x: 668
-                  y: 14
-                  bg_color: 0x052E16
+                  x: 695
+                  y: 16
+                  bg_opa: TRANSP
+                  bg_color: 0
                   border_color: 0x22C55E
                   border_width: 2
                   radius: 6
@@ -1072,9 +1139,10 @@ lvgl:
                   id: badge_fr
                   width: 84
                   height: 44
-                  x: 668
-                  y: 272
-                  bg_color: 0x052E16
+                  x: 695
+                  y: 300
+                  bg_opa: TRANSP
+                  bg_color: 0
                   border_color: 0x22C55E
                   border_width: 2
                   radius: 6
@@ -1104,9 +1172,10 @@ lvgl:
                   id: badge_rl
                   width: 84
                   height: 44
-                  x: 8
-                  y: 14
-                  bg_color: 0x052E16
+                  x: 2
+                  y: 16
+                  bg_opa: TRANSP
+                  bg_color: 0
                   border_color: 0x22C55E
                   border_width: 2
                   radius: 6
@@ -1136,9 +1205,10 @@ lvgl:
                   id: badge_rr
                   width: 84
                   height: 44
-                  x: 8
-                  y: 272
-                  bg_color: 0x052E16
+                  x: 2
+                  y: 300
+                  bg_opa: TRANSP
+                  bg_color: 0
                   border_color: 0x22C55E
                   border_width: 2
                   radius: 6
@@ -1163,12 +1233,44 @@ lvgl:
                         x: -4
                         text: "bar"
 
+              # ── Bande batterie (bas de l'onglet Dolphin) ─────────────────────
+              - obj:
+                  width: 800
+                  height: 93
+                  align: BOTTOM_MID
+                  y: -2
+                  bg_opa: TRANSP
+                  bg_color: 0
+                  border_width: 0
+                  pad_all: 0
+                  widgets:
+                    # Canvas icône batterie 64×32
+                    - canvas:
+                        id: batt_canvas
+                        width: 64
+                        height: 32
+                        align: CENTER
+                        x: -56
+                        y: 20
+                    # Valeur SOC
+                    - label:
+                        id: lbl_batt_soc
+                        text_font: b612_32
+                        text_color: 0x334155
+                        bg_opa: TRANSP
+                        bg_color: 0
+                        align: CENTER
+                        x: 40
+                        y: 20
+                        text: "--%"
+
           # ══════════════════════════════════════════════════════════════════════
           #  ONGLET 1 — ATTITUDE
           # ══════════════════════════════════════════════════════════════════════
           - name: "Inclinometre"
             bg_color: 0x0D1117
             border_width: 0
+            scrollable: false
             widgets:
 
               # ── ROULIS (y=2 h=210) ─────────────────────────────────────────
@@ -1338,6 +1440,7 @@ lvgl:
           - name: "Info"
             bg_color: 0x0D1117
             border_width: 0
+            scrollable: false
             widgets:
 
               # ── Panneau IMU gauche (x=5 w=385 h=440) ──────────────────────
@@ -1703,6 +1806,7 @@ lvgl:
           - name: "Parametres"
             bg_color: 0x0D1117
             border_width: 0
+            scrollable: false
             widgets:
 
               # ── Section Calibration ────────────────────────────────────────

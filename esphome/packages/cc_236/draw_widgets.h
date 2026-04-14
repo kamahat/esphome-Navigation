@@ -457,4 +457,75 @@ static void clinometer_draw(lv_obj_t* canvas, float angle, float max_angle) {
 }
 
 
+
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  3. ICONE BATTERIE — canvas 64x32 px
+// ═════════════════════════════════════════════════════════════════════════════
+static const int32_t BATT_W   = 64;
+static const int32_t BATT_H   = 32;
+static const int32_t BATT_BW  = 54;   // largeur corps
+static const int32_t BATT_BH  = 24;   // hauteur corps
+static const int32_t BATT_BX  = 2;    // x coin corps
+static const int32_t BATT_BY  = 4;    // y coin corps
+static const int32_t BATT_TW  = 6;    // largeur borne
+static const int32_t BATT_TH  = 10;   // hauteur borne
+static const int32_t BATT_BT  = 2;    // epaisseur bordure
+static const int32_t BATT_PAD = 3;    // padding remplissage
+
+static lv_color_t _batt_color(float soc, bool charging) {
+    if (soc < 0.0f)   return C(0x334155);
+    if (charging)      return C(0x3B82F6);
+    if (soc > 80.0f)  return C(0x00FF7F);
+    if (soc > 20.0f)  return C(0x22C55E);
+    if (soc > 10.0f)  return C(0xFACC15);
+    if (soc > 6.0f)   return C(0xF59E0B);
+    return              C(0xEF4444);
+}
+
+static void battery_draw(lv_obj_t* canvas, float soc, bool charging) {
+    if (!canvas) return;
+    lv_color_t col = _batt_color(soc, charging);
+
+    lv_canvas_fill_bg(canvas, C(0x000000), LV_OPA_TRANSP);
+
+    // Corps (bordure coloree)
+    lv_draw_rect_dsc_t rd; lv_draw_rect_dsc_init(&rd);
+    rd.bg_opa = LV_OPA_TRANSP; rd.border_color = col;
+    rd.border_width = BATT_BT; rd.radius = 3; rd.border_opa = LV_OPA_COVER;
+    lv_canvas_draw_rect(canvas, BATT_BX, BATT_BY, BATT_BW, BATT_BH, &rd);
+
+    // Borne +
+    lv_draw_rect_dsc_t td; lv_draw_rect_dsc_init(&td);
+    td.bg_color = col; td.bg_opa = LV_OPA_COVER; td.border_width = 0; td.radius = 2;
+    int32_t ty = BATT_BY + (BATT_BH - BATT_TH) / 2;
+    lv_canvas_draw_rect(canvas, BATT_BX + BATT_BW, ty, BATT_TW, BATT_TH, &td);
+
+    // Remplissage SOC
+    if (soc >= 0.0f) {
+        float pct = std::max(0.0f, std::min(1.0f, soc / 100.0f));
+        int32_t inner_w = BATT_BW - 2*BATT_BT - 2*BATT_PAD;
+        int32_t fill_w  = std::max((int32_t)2, (int32_t)(pct * (float)inner_w));
+        lv_draw_rect_dsc_t fr; lv_draw_rect_dsc_init(&fr);
+        fr.bg_color = col; fr.bg_opa = LV_OPA_COVER; fr.border_width = 0; fr.radius = 2;
+        lv_canvas_draw_rect(canvas,
+            BATT_BX + BATT_BT + BATT_PAD,
+            BATT_BY + BATT_BT + BATT_PAD,
+            fill_w,
+            BATT_BH - 2*(BATT_BT + BATT_PAD), &fr);
+
+        // Eclair si en charge
+        if (charging) {
+            int32_t cx = BATT_BX + BATT_BW/2;
+            _cline(canvas, (float)(cx+3), (float)(BATT_BY+BATT_BT+2),
+                           (float)(cx-2), (float)(BATT_BY+BATT_BH/2),
+                           C(0xFFFFFF), 2);
+            _cline(canvas, (float)(cx-2), (float)(BATT_BY+BATT_BH/2),
+                           (float)(cx+5), (float)(BATT_BY+BATT_BH-BATT_BT-2),
+                           C(0xFFFFFF), 2);
+        }
+    }
+    lv_obj_invalidate(canvas);
+}
+
 #undef C
