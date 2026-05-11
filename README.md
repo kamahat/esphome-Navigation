@@ -6,15 +6,36 @@ Firmware ESPHome pour le tableau de bord embarqué du camping-car **Bürstner De
 
 ---
 
-## Matériel cible (`cc-236`)
+## Matériel recommandé
+
+### Écran ESP32
+
+> **Recommandé : [CrowPanel Advance 5.0" HMI ESP32 — 800×480 IPS](https://www.elecrow.com/crowpanel-advance-5-0-hmi-esp32-ai-display-800x480-ips-artificial-intelligent-touch-screen.html)**
+> Choisir la version **Advanced avec ESP32-C6** pour le support BLE natif.
+
+![CrowPanel 5" ESP32](https://raw.githubusercontent.com/kamahat/esphome-Navigation/main/docs/esp32_hmi_display_5inch.webp)
 
 | Composant | Référence |
 |---|---|
-| Display | Elecrow 5" ESP32-S3 800×480 |
+| Display | CrowPanel 5" ESP32-S3 800×480 IPS Touch (`cc-236`) |
 | IMU | BMI160 — I2C SDA=GPIO19, SCL=GPIO20 |
 | Magnétomètre | MMC5983MA *(en cours)* |
 | TPMS | cc-168 ESP32-C6 → UDP port 60607 |
 | BMS | cc-167 ESP32 → UDP port 60608 |
+
+---
+
+## Aperçu
+
+### Onglet Dolphin — TPMS + batterie
+
+![Onglet Dolphin TPMS](https://raw.githubusercontent.com/kamahat/esphome-Navigation/main/docs/TPMS.jpg)
+
+### Onglet Inclinomètre — Clinomètre + Compas
+
+![Onglet Inclinomètre](https://raw.githubusercontent.com/kamahat/esphome-Navigation/main/docs/inclinometre.jpg)
+
+---
 
 ## Structure
 
@@ -30,6 +51,10 @@ fonts/
   B612-Regular.ttf            Police TTF
 images/
   delfin-c621.png             Plan véhicule vue de dessus (onglet Dolphin)
+docs/
+  TPMS.jpg                    Capture onglet Dolphin
+  inclinometre.jpg            Capture onglet Inclinomètre
+  esp32_hmi_display_5inch.webp  Photo matériel
 ```
 
 ## Onglets UI
@@ -46,6 +71,6 @@ images/
 - Clinomètre "bille dans tube" roulis ±15° et tangage ±15°
 - Compas nautique avec horizon artificiel et pitch ladder
 - TPMS : correction Gay-Lussac (pression ramenée à 20°C)
-- Batterie : SOC avec icône colorée (rouge→vert neon→bleu charge)
+- Batterie : SOC avec icône colorée (rouge → vert neon → bleu charge)
 - Veille écran automatique 10 min (réveil par toucher)
 - Calibration offset persistante en flash
