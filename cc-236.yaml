@@ -17,8 +17,8 @@ substitutions:
     variant: esp32s3
   net:
     octet1: "236"
-    IP1: 10.104.30.${net.octet1}
-    IP2: 192.168.80.${net.octet1}
+    IP1: 10.104.30.236
+    IP2: 192.168.80.236
 
 esphome:
   name: ${device_name}
